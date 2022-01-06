@@ -34,9 +34,13 @@ jobs:
       - name: Cache Cargo
         uses: actions/cache@v2
         with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
+          path: /home/runner/.cargo
+          key: cargo-S3-cache-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /home/runner/target
+          key: target-S3-cache-
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
