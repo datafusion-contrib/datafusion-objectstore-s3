@@ -15,4 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod error;
 pub mod object_store;
