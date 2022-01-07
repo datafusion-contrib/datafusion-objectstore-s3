@@ -21,7 +21,6 @@ on: [push, pull_request]
 jobs:
   test:
     name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
-    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     strategy:
       matrix:
