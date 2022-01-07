@@ -60,11 +60,9 @@ jobs:
       - name: Run tests
         run: |
           cargo test
-  lint:
-    name: Lint
+  fmt:
+    name: fmt
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
     steps:
       - uses: actions/checkout@v2
       - name: Setup toolchain
@@ -75,7 +73,7 @@ jobs:
       - name: Run
         run: cargo fmt --all -- --check
   clippy:
-    name: Clippy
+    name: clippy
     runs-on: ubuntu-latest
     strategy:
       matrix:
