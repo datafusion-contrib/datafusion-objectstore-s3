@@ -40,7 +40,7 @@ use aws_types::credentials::Credentials;
 use bytes::Buf;
 use http::Uri;
 
-pub struct ClientContext {
+pub struct S3Context {
     region: Option<String>,
     endpoint: Option<String>,
     retry_max_attempts: Option<u32>,
@@ -49,9 +49,9 @@ pub struct ClientContext {
     secret_key: Option<String>,
 }
 
-impl ClientContext {
+impl S3Context {
     async fn to_client(self) -> Client {
-        let ClientContext {
+        let S3Context {
             region,
             endpoint,
             retry_max_attempts,
@@ -99,7 +99,7 @@ impl ClientContext {
 /// Holds all s3 authorization variants
 enum Authorizer {
     Environment,
-    Http(ClientContext),
+    Http(S3Context),
 }
 
 impl Authorizer {
@@ -117,47 +117,8 @@ impl Authorizer {
 /// new_client creates a new aws_sdk_s3::Client
 /// at time of writing the aws_config::load_from_env() does not allow configuring the endpoint which is
 /// required for continuous integration testing and uses outside the AWS ecosystem
-async fn new_client(
-    region: Option<String>,
-    endpoint: Option<String>,
-    retry_max_attempts: Option<u32>,
-    api_call_attempt_timeout_seconds: Option<u64>,
-    access_key: Option<String>,
-    secret_key: Option<String>,
-) -> Client {
-    let region_provider = RegionProviderChain::first_try(region.map(Region::new))
-        .or_default_provider()
-        .or_else(Region::new("us-west-2"))
-        .region()
-        .await;
-
-    let mut config_builder = Config::builder().region(region_provider);
-
-    if let Some(endpoint) = endpoint {
-        config_builder = config_builder
-            .endpoint_resolver(Endpoint::immutable(Uri::from_str(&endpoint).unwrap()));
-    }
-
-    if let Some(retry_max_attempts) = retry_max_attempts {
-        config_builder =
-            config_builder.retry_config(RetryConfig::new().with_max_attempts(retry_max_attempts));
-    }
-
-    if let Some(api_call_attempt_timeout_seconds) = api_call_attempt_timeout_seconds {
-        config_builder =
-            config_builder.timeout_config(TimeoutConfig::new().with_api_call_attempt_timeout(
-                Some(Duration::from_secs(api_call_attempt_timeout_seconds)),
-            ));
-    };
-
-    if let (Some(access_key), Some(secret_key)) = (access_key, secret_key) {
-        config_builder = config_builder.credentials_provider(Credentials::new(
-            access_key, secret_key, None, None, "Static",
-        ));
-    };
-
-    let config = config_builder.build();
-    Client::from_conf(config)
+async fn new_client(authorizer: Authorizer) -> Client {
+    authorizer.authorize().await
 }
 
 #[derive(Debug)]
@@ -175,15 +136,17 @@ pub struct AmazonS3FileSystem {
 
 impl AmazonS3FileSystem {
     pub async fn new(
-        region: Option<String>,
-        endpoint: Option<String>,
-        retry_max_attempts: Option<u32>,
-        api_call_attempt_timeout_seconds: Option<u64>,
-        access_key: Option<String>,
-        secret_key: Option<String>,
+        // region: Option<String>,
+        // endpoint: Option<String>,
+        // retry_max_attempts: Option<u32>,
+        // api_call_attempt_timeout_seconds: Option<u64>,
+        // access_key: Option<String>,
+        // secret_key: Option<String>,
+        authorizer: Authorizer,
         bucket: &str,
-        load_from_env: bool,
     ) -> Self {
+        let client = new_client(authorizer).await;
+
         Self {
             region,
             endpoint,
