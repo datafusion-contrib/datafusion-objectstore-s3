@@ -40,6 +40,7 @@ use aws_types::credentials::Credentials;
 use bytes::Buf;
 use http::Uri;
 
+#[derive(Clone, Debug)]
 pub struct S3Context {
     region: Option<String>,
     endpoint: Option<String>,
@@ -96,8 +97,22 @@ impl S3Context {
     }
 }
 
+impl Default for S3Context {
+    fn default() -> Self {
+        S3Context {
+            region: None,
+            endpoint: None,
+            retry_max_attempts: None,
+            api_call_attempt_timeout_seconds: None,
+            access_key: None,
+            secret_key: None,
+        }
+    }
+}
+
 /// Holds all s3 authorization variants
-enum Authorizer {
+#[derive(Clone, Debug)]
+pub enum Authorizer {
     Environment,
     Http(S3Context),
 }
@@ -121,39 +136,20 @@ async fn new_client(authorizer: Authorizer) -> Client {
     authorizer.authorize().await
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 // ObjectStore implementation for the Amazon S3 API
 pub struct AmazonS3FileSystem {
-    region: Option<String>,
-    endpoint: Option<String>,
-    retry_max_attempts: Option<u32>,
-    api_call_attempt_timeout_seconds: Option<u64>,
-    access_key: Option<String>,
-    secret_key: Option<String>,
+    authorizer: Authorizer,
     bucket: String,
     client: Client,
 }
 
 impl AmazonS3FileSystem {
-    pub async fn new(
-        // region: Option<String>,
-        // endpoint: Option<String>,
-        // retry_max_attempts: Option<u32>,
-        // api_call_attempt_timeout_seconds: Option<u64>,
-        // access_key: Option<String>,
-        // secret_key: Option<String>,
-        authorizer: Authorizer,
-        bucket: &str,
-    ) -> Self {
-        let client = new_client(authorizer).await;
+    pub async fn new(authorizer: Authorizer, bucket: &str) -> Self {
+        let client = new_client(authorizer.clone()).await;
 
         Self {
-            region,
-            endpoint,
-            retry_max_attempts,
-            api_call_attempt_timeout_seconds,
-            access_key,
-            secret_key,
+            authorizer,
             bucket: bucket.to_string(),
             client,
         }
@@ -196,12 +192,7 @@ impl ObjectStore for AmazonS3FileSystem {
 
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(AmazonS3FileReader::new(
-            self.region.clone(),
-            self.endpoint.clone(),
-            self.retry_max_attempts,
-            self.api_call_attempt_timeout_seconds,
-            self.access_key.clone(),
-            self.secret_key.clone(),
+            self.authorizer.clone(),
             &self.bucket,
             file,
         )?))
@@ -209,35 +200,16 @@ impl ObjectStore for AmazonS3FileSystem {
 }
 
 struct AmazonS3FileReader {
-    region: Option<String>,
-    endpoint: Option<String>,
-    retry_max_attempts: Option<u32>,
-    api_call_attempt_timeout_seconds: Option<u64>,
-    access_key: Option<String>,
-    secret_key: Option<String>,
+    authorizer: Authorizer,
     bucket: String,
     file: SizedFile,
 }
 
 impl AmazonS3FileReader {
     #[allow(clippy::too_many_arguments)]
-    fn new(
-        region: Option<String>,
-        endpoint: Option<String>,
-        retry_max_attempts: Option<u32>,
-        api_call_attempt_timeout_seconds: Option<u64>,
-        access_key: Option<String>,
-        secret_key: Option<String>,
-        bucket: &str,
-        file: SizedFile,
-    ) -> Result<Self> {
+    fn new(authorizer: Authorizer, bucket: &str, file: SizedFile) -> Result<Self> {
         Ok(Self {
-            region,
-            endpoint,
-            retry_max_attempts,
-            api_call_attempt_timeout_seconds,
-            access_key,
-            secret_key,
+            authorizer: authorizer.clone(),
             bucket: bucket.to_string(),
             file,
         })
@@ -251,17 +223,13 @@ impl ObjectReader for AmazonS3FileReader {
     }
 
     fn sync_chunk_reader(&self, start: u64, length: usize) -> Result<Box<dyn Read + Send + Sync>> {
-        let region = self.region.clone();
-        let endpoint = self.endpoint.clone();
-        let retry_max_attempts = self.retry_max_attempts;
-        let api_call_attempt_timeout_seconds = self.api_call_attempt_timeout_seconds;
-        let access_key = self.access_key.clone();
-        let secret_key = self.secret_key.clone();
         let bucket = self.bucket.clone();
         let key = self.file.path.clone();
 
         // once the async chunk file readers have been implemented this complexity can be removed
         let (tx, rx) = mpsc::channel();
+
+        let auth = self.authorizer.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -270,15 +238,7 @@ impl ObjectReader for AmazonS3FileReader {
 
             rt.block_on(async move {
                 // aws_sdk_s3::Client appears bound to the runtime and will deadlock if cloned from the main runtime
-                let client = new_client(
-                    region,
-                    endpoint,
-                    retry_max_attempts,
-                    api_call_attempt_timeout_seconds,
-                    access_key,
-                    secret_key,
-                )
-                .await;
+                let client = new_client(auth).await;
 
                 let get_object = client.get_object().bucket(bucket).key(key);
                 let resp = if length > 0 {
@@ -328,22 +288,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_files() -> Result<()> {
-        let amazon_s3_file_system = AmazonS3FileSystem::new(
-            None,
-            Some("http://localhost:9000".to_string()),
-            None,
-            None,
-            Some("AKIAIOSFODNN7EXAMPLE".to_string()),
-            Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
-            "data",
-            false,
-        )
-        .await;
-        let mut files = amazon_s3_file_system.list_file("").await?;
+        let access_key = "AKIAIOSFODNN7EXAMPLE".to_string();
+        let secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string();
+        let s3_ctx = S3Context {
+            region: None,
+            endpoint: Some("http://localhost:9000".to_string()),
+            retry_max_attempts: None,
+            api_call_attempt_timeout_seconds: None,
+            access_key: Some(access_key),
+            secret_key: Some(secret_key),
+        };
+
+        let auth = Authorizer::Http;
+
+        let fs = AmazonS3FileSystem::new(auth(s3_ctx), "data").await;
+        let mut files = fs.list_file("").await?;
 
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
-            let mut reader = amazon_s3_file_system
+            let mut reader = fs
                 .file_reader(sized_file.clone())
                 .unwrap()
                 .sync_chunk_reader(0, sized_file.size as usize)
@@ -369,24 +332,25 @@ mod tests {
         let raw_slice = &raw_bytes[start..start + length];
         assert_eq!(raw_slice.len(), length);
 
-        let amazon_s3_file_system = AmazonS3FileSystem::new(
-            None,
-            Some("http://localhost:9000".to_string()),
-            None,
-            None,
-            Some("AKIAIOSFODNN7EXAMPLE".to_string()),
-            Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
-            "data",
-            false,
-        )
-        .await;
-        let mut files = amazon_s3_file_system
-            .list_file("alltypes_plain.snappy.parquet")
-            .await?;
+        let access_key = "AKIAIOSFODNN7EXAMPLE".to_string();
+        let secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string();
+        let s3_ctx = S3Context {
+            region: None,
+            endpoint: Some("http://localhost:9000".to_string()),
+            retry_max_attempts: None,
+            api_call_attempt_timeout_seconds: None,
+            access_key: Some(access_key),
+            secret_key: Some(secret_key),
+        };
+
+        let auth = Authorizer::Http;
+
+        let fs = AmazonS3FileSystem::new(auth(s3_ctx), "data").await;
+        let mut files = fs.list_file("alltypes_plain.snappy.parquet").await?;
 
         if let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
-            let mut reader = amazon_s3_file_system
+            let mut reader = fs
                 .file_reader(sized_file.clone())
                 .unwrap()
                 .sync_chunk_reader(start as u64, length)
@@ -404,19 +368,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_parquet() -> Result<()> {
-        let amazon_s3_file_system = Arc::new(
-            AmazonS3FileSystem::new(
-                None,
-                Some("http://localhost:9000".to_string()),
-                None,
-                None,
-                Some("AKIAIOSFODNN7EXAMPLE".to_string()),
-                Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
-                "data",
-                false,
-            )
-            .await,
-        );
+        let access_key = "AKIAIOSFODNN7EXAMPLE".to_string();
+        let secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string();
+        let s3_ctx = S3Context {
+            region: None,
+            endpoint: Some("http://localhost:9000".to_string()),
+            retry_max_attempts: None,
+            api_call_attempt_timeout_seconds: None,
+            access_key: Some(access_key),
+            secret_key: Some(secret_key),
+        };
+
+        let auth = Authorizer::Http;
+
+        let fs = Arc::new(AmazonS3FileSystem::new(auth(s3_ctx), "data").await);
 
         let filename = "alltypes_plain.snappy.parquet";
 
@@ -428,19 +393,33 @@ mod tests {
             table_partition_cols: vec![],
         };
 
-        let resolved_schema = listing_options
-            .infer_schema(amazon_s3_file_system.clone(), filename)
-            .await?;
+        let resolved_schema = listing_options.infer_schema(fs.clone(), filename).await?;
 
-        let table = ListingTable::new(
-            amazon_s3_file_system,
-            filename.to_owned(),
-            resolved_schema,
-            listing_options,
-        );
+        let table = ListingTable::new(fs, filename.to_owned(), resolved_schema, listing_options);
 
         let exec = table.scan(&None, 1024, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(2));
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_client_from_context() -> Result<()> {
+        let access_key = "AKIAIOSFODNN7EXAMPLE".to_string();
+        let secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string();
+        let s3_ctx = S3Context {
+            region: None,
+            endpoint: Some("http://localhost:9000".to_string()),
+            retry_max_attempts: None,
+            api_call_attempt_timeout_seconds: None,
+            access_key: Some(access_key),
+            secret_key: Some(secret_key),
+        };
+
+        let auth = Authorizer::Http;
+
+        let fs = AmazonS3FileSystem::new(auth(s3_ctx), "data").await;
+
+        assert_eq!(fs.bucket, "data");
 
         Ok(())
     }
