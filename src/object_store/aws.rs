@@ -108,24 +108,35 @@ impl AmazonS3FileSystem {
         access_key: Option<String>,
         secret_key: Option<String>,
         bucket: &str,
+        load_from_env: bool,
     ) -> Self {
+        let client = match load_from_env {
+            true => {
+                let config = aws_config::load_from_env().await;
+                Client::new(&config)
+            }
+            false => {
+                new_client(
+                    region.clone(),
+                    endpoint.clone(),
+                    retry_max_attempts,
+                    api_call_attempt_timeout_seconds,
+                    access_key.clone(),
+                    secret_key.clone(),
+                )
+                .await
+            }
+        };
+
         Self {
-            region: region.clone(),
-            endpoint: endpoint.clone(),
+            region,
+            endpoint,
             retry_max_attempts,
             api_call_attempt_timeout_seconds,
-            access_key: access_key.clone(),
-            secret_key: secret_key.clone(),
+            access_key,
+            secret_key,
             bucket: bucket.to_string(),
-            client: new_client(
-                region,
-                endpoint,
-                retry_max_attempts,
-                api_call_attempt_timeout_seconds,
-                access_key,
-                secret_key,
-            )
-            .await,
+            client,
         }
     }
 }
@@ -306,6 +317,7 @@ mod tests {
             Some("AKIAIOSFODNN7EXAMPLE".to_string()),
             Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             "data",
+            false,
         )
         .await;
         let mut files = amazon_s3_file_system.list_file("").await?;
@@ -346,6 +358,7 @@ mod tests {
             Some("AKIAIOSFODNN7EXAMPLE".to_string()),
             Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
             "data",
+            false,
         )
         .await;
         let mut files = amazon_s3_file_system
@@ -381,6 +394,7 @@ mod tests {
                 Some("AKIAIOSFODNN7EXAMPLE".to_string()),
                 Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
                 "data",
+                false,
             )
             .await,
         );
