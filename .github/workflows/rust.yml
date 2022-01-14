@@ -59,6 +59,9 @@ jobs:
           -e "MINIO_SECRET_KEY=minioadmin" \
           quay.io/minio/minio server /data \
           --console-address ":9001"
+          export AWS_ACCESS_KEY_ID=minioadmin
+          export AWS_SECRET_ACCESS_KEY=minioadmin
+          export AWS_EC2_METADATA_DISABLED=true
       - name: Run tests
         run: |
           cargo test
