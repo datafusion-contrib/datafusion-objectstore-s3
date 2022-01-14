@@ -55,6 +55,8 @@ jobs:
           -v "$(pwd)/parquet-testing:/data" \
           -e "MINIO_ROOT_USER=AKIAIOSFODNN7EXAMPLE" \
           -e "MINIO_ROOT_PASSWORD=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
+          -e "MINIO_ACCESS_KEY=minioadmin" \
+          -e "MINIO_SECRET_KEY=minioadmin" \
           quay.io/minio/minio server /data \
           --console-address ":9001"
       - name: Run tests
