@@ -9,20 +9,21 @@ Tests are run with [MinIO](https://min.io/) which provides a containerized imple
 First clone the test data repository:
 
 ```bash
-git clone https://github.com/apache/parquet-testing.git
+git submodule update --init --recursive
 ```
 
 Then start the MinIO container:
 
 ```bash
 docker run \
+--detach \
 --rm \
--p 9000:9000 \
--p 9001:9001 \
+--publish 9000:9000 \
+--publish 9001:9001 \
 --name minio \
--v "$(pwd)/parquet-testing:/data" \
--e "MINIO_ROOT_USER=AKIAIOSFODNN7EXAMPLE" \
--e "MINIO_ROOT_PASSWORD=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
+--volume "$(pwd)/parquet-testing:/data" \
+--env "MINIO_ROOT_USER=AKIAIOSFODNN7EXAMPLE" \
+--env "MINIO_ROOT_PASSWORD=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
 quay.io/minio/minio server /data \
 --console-address ":9001"
 ```
