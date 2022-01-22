@@ -280,6 +280,7 @@ impl ObjectReader for AmazonS3FileReader {
 mod tests {
     use super::*;
     use aws_types::credentials::Credentials;
+    use datafusion::assert_batches_eq;
     use datafusion::datasource::file_format::parquet::ParquetFormat;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
@@ -474,8 +475,17 @@ mod tests {
 
         ctx.register_table("tbl", Arc::new(table))?;
 
-        let df = ctx.sql("SELECT * FROM tbl").await?;
-        df.show().await?;
+        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
+        let expected = vec![
+            "+---------+------------+----------------------------------------------+",
+            "| int_col | double_col | CAST(alltypes_plain.date_string_col AS Utf8) |",
+            "+---------+------------+----------------------------------------------+",
+            "| 1       | 10.1       | 03/01/09                                     |",
+            "| 1       | 10.1       | 04/01/09                                     |",
+            "| 1       | 10.1       | 02/01/09                                     |",
+            "+---------+------------+----------------------------------------------+",
+        ];
+        assert_batches_eq!(&expected, &batches);
 
         Ok(())
     }
