@@ -364,7 +364,7 @@ mod tests {
         if let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
             let mut reader = amazon_s3_file_system
-                .file_reader(sized_file.clone())
+                .file_reader(sized_file)
                 .unwrap()
                 .sync_chunk_reader(start as u64, length)
                 .unwrap();
