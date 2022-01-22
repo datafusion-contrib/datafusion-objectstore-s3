@@ -4,9 +4,10 @@ Enable S3 as an ObjectStore for Datafusion
 
 ## Querying files on S3 with DataFusion
 
-```rust
+This crate can be used for interacting with both AWS S3 and implementers of the S3 standard. Examples for querying AWS and other implementors, such as Minio, are shown below.
 
-// Load from default credential provider
+```rust
+// Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
 let amazon_s3_file_system = Arc::new(
     AmazonS3FileSystem::new(
         None,
@@ -19,7 +20,35 @@ let amazon_s3_file_system = Arc::new(
     )
     .await,
 );
+```
 
+```rust
+const ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
+const SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+const PROVIDER_NAME: &str = "Static";
+const MINIO_ENDPOINT: &str = "http://localhost:9000";
+const BUCKET: &str = "data";
+
+// Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
+let amazon_s3_file_system = AmazonS3FileSystem::new(
+    Some(SharedCredentialsProvider::new(Credentials::new(
+        MINIO_ACCESS_KEY_ID,
+        MINIO_SECRET_ACCESS_KEY,
+        None,
+        None,
+        PROVIDER_NAME,
+    ))),
+    None,
+    Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+    None,
+    None,
+    None,
+    BUCKET,
+)
+.await;
+```
+
+```rust
 let filename = "alltypes_plain.snappy.parquet";
 
 let listing_options = ListingOptions {

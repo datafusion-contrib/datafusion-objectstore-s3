@@ -475,7 +475,7 @@ mod tests {
         ctx.register_table("tbl", Arc::new(table))?;
 
         let df = ctx.sql("SELECT * FROM tbl").await?;
-        df.show();
+        df.show().await?;
 
         Ok(())
     }
