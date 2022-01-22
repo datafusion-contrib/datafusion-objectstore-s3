@@ -424,4 +424,50 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    #[should_panic(expected = "Could not parse metadata: bad data")]
+    async fn test_read_alternative_bucket() {
+        let amazon_s3_file_system = Arc::new(
+            AmazonS3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let filename = "bad_data/PARQUET-1481.parquet";
+
+        let listing_options = ListingOptions {
+            format: Arc::new(ParquetFormat::default()),
+            collect_stat: true,
+            file_extension: "parquet".to_owned(),
+            target_partitions: num_cpus::get(),
+            table_partition_cols: vec![],
+        };
+
+        let resolved_schema = listing_options
+            .infer_schema(amazon_s3_file_system.clone(), filename)
+            .await
+            .unwrap();
+
+        let table = ListingTable::new(
+            amazon_s3_file_system,
+            filename.to_owned(),
+            resolved_schema,
+            listing_options,
+        );
+
+        table.scan(&None, 1024, &[], None).await.unwrap();
+    }
 }
