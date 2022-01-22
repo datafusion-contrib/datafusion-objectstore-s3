@@ -475,7 +475,7 @@ mod tests {
         ctx.register_table("tbl", Arc::new(table))?;
 
         let df = ctx.sql("SELECT * FROM tbl").await?;
-        let batches = df.collect().await?;
+        df.show();
 
         Ok(())
     }
