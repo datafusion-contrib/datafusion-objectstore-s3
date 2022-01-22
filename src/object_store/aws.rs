@@ -91,7 +91,6 @@ pub struct AmazonS3FileSystem {
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
     timeout_config: Option<TimeoutConfig>,
-    bucket: String,
     client: Client,
 }
 
@@ -103,7 +102,6 @@ impl AmazonS3FileSystem {
         retry_config: Option<RetryConfig>,
         sleep: Option<Arc<dyn AsyncSleep>>,
         timeout_config: Option<TimeoutConfig>,
-        bucket: &str,
     ) -> Self {
         Self {
             credentials_provider: credentials_provider.clone(),
@@ -112,7 +110,6 @@ impl AmazonS3FileSystem {
             retry_config: retry_config.clone(),
             sleep: sleep.clone(),
             timeout_config: timeout_config.clone(),
-            bucket: bucket.to_string(),
             client: new_client(credentials_provider, region, endpoint, None, None, None).await,
         }
     }
@@ -121,10 +118,15 @@ impl AmazonS3FileSystem {
 #[async_trait]
 impl ObjectStore for AmazonS3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+        let (bucket, prefix) = match prefix.split_once("/") {
+            Some((bucket, prefix)) => (bucket.to_owned(), prefix),
+            None => (prefix.to_owned(), ""),
+        };
+
         let objects = self
             .client
             .list_objects_v2()
-            .bucket(&self.bucket)
+            .bucket(&bucket)
             .prefix(prefix)
             .send()
             .await
@@ -133,10 +135,10 @@ impl ObjectStore for AmazonS3FileSystem {
             .unwrap_or_default()
             .to_vec();
 
-        let result = stream::iter(objects.into_iter().map(|object| {
+        let result = stream::iter(objects.into_iter().map(move |object| {
             Ok(FileMeta {
                 sized_file: SizedFile {
-                    path: object.key().unwrap_or("").to_string(),
+                    path: format!("{}/{}", &bucket, object.key().unwrap_or("")),
                     size: object.size() as u64,
                 },
                 last_modified: object
@@ -160,7 +162,6 @@ impl ObjectStore for AmazonS3FileSystem {
             self.retry_config.clone(),
             self.sleep.clone(),
             self.timeout_config.clone(),
-            &self.bucket,
             file,
         )?))
     }
@@ -173,7 +174,6 @@ struct AmazonS3FileReader {
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
     timeout_config: Option<TimeoutConfig>,
-    bucket: String,
     file: SizedFile,
 }
 
@@ -186,7 +186,6 @@ impl AmazonS3FileReader {
         retry_config: Option<RetryConfig>,
         sleep: Option<Arc<dyn AsyncSleep>>,
         timeout_config: Option<TimeoutConfig>,
-        bucket: &str,
         file: SizedFile,
     ) -> Result<Self> {
         Ok(Self {
@@ -196,7 +195,6 @@ impl AmazonS3FileReader {
             retry_config,
             sleep,
             timeout_config,
-            bucket: bucket.to_string(),
             file,
         })
     }
@@ -215,8 +213,7 @@ impl ObjectReader for AmazonS3FileReader {
         let retry_config = self.retry_config.clone();
         let sleep = self.sleep.clone();
         let timeout_config = self.timeout_config.clone();
-        let bucket = self.bucket.clone();
-        let key = self.file.path.clone();
+        let file_path = self.file.path.clone();
 
         // once the async chunk file readers have been implemented this complexity can be removed
         let (tx, rx) = mpsc::channel();
@@ -237,6 +234,11 @@ impl ObjectReader for AmazonS3FileReader {
                     timeout_config,
                 )
                 .await;
+
+                let (bucket, key) = match file_path.split_once("/") {
+                    Some((bucket, prefix)) => (bucket, prefix),
+                    None => (file_path.as_str(), ""),
+                };
 
                 let get_object = client.get_object().bucket(bucket).key(key);
                 let resp = if length > 0 {
@@ -290,7 +292,6 @@ mod tests {
     const SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
     const PROVIDER_NAME: &str = "Static";
     const MINIO_ENDPOINT: &str = "http://localhost:9000";
-    const BUCKET: &str = "data";
 
     #[tokio::test]
     async fn test_read_files() -> Result<()> {
@@ -307,11 +308,10 @@ mod tests {
             None,
             None,
             None,
-            BUCKET,
         )
         .await;
 
-        let mut files = amazon_s3_file_system.list_file("").await?;
+        let mut files = amazon_s3_file_system.list_file("data").await?;
 
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
@@ -354,11 +354,10 @@ mod tests {
             None,
             None,
             None,
-            BUCKET,
         )
         .await;
         let mut files = amazon_s3_file_system
-            .list_file("alltypes_plain.snappy.parquet")
+            .list_file("data/alltypes_plain.snappy.parquet")
             .await?;
 
         if let Some(file) = files.next().await {
@@ -395,12 +394,11 @@ mod tests {
                 None,
                 None,
                 None,
-                BUCKET,
             )
             .await,
         );
 
-        let filename = "alltypes_plain.snappy.parquet";
+        let filename = "data/alltypes_plain.snappy.parquet";
 
         let listing_options = ListingOptions {
             format: Arc::new(ParquetFormat::default()),
