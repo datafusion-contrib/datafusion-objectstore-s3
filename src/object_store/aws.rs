@@ -40,8 +40,9 @@ use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
 
 /// new_client creates a new aws_sdk_s3::Client
-/// at time of writing the aws_config::load_from_env() does not allow configuring the endpoint which is
-/// required for continuous integration testing and uses outside the AWS ecosystem
+/// this uses aws_config::load_from_env() as a base config then allows users to override specific settings if required
+///
+/// an example use case for overriding is to specify an endpoint which is not Amazon S3 such as MinIO or Ceph.
 async fn new_client(
     credentials_provider: Option<SharedCredentialsProvider>,
     region: Option<Region>,
@@ -91,7 +92,6 @@ pub struct AmazonS3FileSystem {
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
     timeout_config: Option<TimeoutConfig>,
-    bucket: String,
     client: Client,
 }
 
@@ -103,7 +103,6 @@ impl AmazonS3FileSystem {
         retry_config: Option<RetryConfig>,
         sleep: Option<Arc<dyn AsyncSleep>>,
         timeout_config: Option<TimeoutConfig>,
-        bucket: &str,
     ) -> Self {
         Self {
             credentials_provider: credentials_provider.clone(),
@@ -112,7 +111,6 @@ impl AmazonS3FileSystem {
             retry_config: retry_config.clone(),
             sleep: sleep.clone(),
             timeout_config: timeout_config.clone(),
-            bucket: bucket.to_string(),
             client: new_client(credentials_provider, region, endpoint, None, None, None).await,
         }
     }
@@ -121,10 +119,15 @@ impl AmazonS3FileSystem {
 #[async_trait]
 impl ObjectStore for AmazonS3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+        let (bucket, prefix) = match prefix.split_once("/") {
+            Some((bucket, prefix)) => (bucket.to_owned(), prefix),
+            None => (prefix.to_owned(), ""),
+        };
+
         let objects = self
             .client
             .list_objects_v2()
-            .bucket(&self.bucket)
+            .bucket(&bucket)
             .prefix(prefix)
             .send()
             .await
@@ -133,10 +136,10 @@ impl ObjectStore for AmazonS3FileSystem {
             .unwrap_or_default()
             .to_vec();
 
-        let result = stream::iter(objects.into_iter().map(|object| {
+        let result = stream::iter(objects.into_iter().map(move |object| {
             Ok(FileMeta {
                 sized_file: SizedFile {
-                    path: object.key().unwrap_or("").to_string(),
+                    path: format!("{}/{}", &bucket, object.key().unwrap_or("")),
                     size: object.size() as u64,
                 },
                 last_modified: object
@@ -160,7 +163,6 @@ impl ObjectStore for AmazonS3FileSystem {
             self.retry_config.clone(),
             self.sleep.clone(),
             self.timeout_config.clone(),
-            &self.bucket,
             file,
         )?))
     }
@@ -173,7 +175,6 @@ struct AmazonS3FileReader {
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
     timeout_config: Option<TimeoutConfig>,
-    bucket: String,
     file: SizedFile,
 }
 
@@ -186,7 +187,6 @@ impl AmazonS3FileReader {
         retry_config: Option<RetryConfig>,
         sleep: Option<Arc<dyn AsyncSleep>>,
         timeout_config: Option<TimeoutConfig>,
-        bucket: &str,
         file: SizedFile,
     ) -> Result<Self> {
         Ok(Self {
@@ -196,7 +196,6 @@ impl AmazonS3FileReader {
             retry_config,
             sleep,
             timeout_config,
-            bucket: bucket.to_string(),
             file,
         })
     }
@@ -215,8 +214,7 @@ impl ObjectReader for AmazonS3FileReader {
         let retry_config = self.retry_config.clone();
         let sleep = self.sleep.clone();
         let timeout_config = self.timeout_config.clone();
-        let bucket = self.bucket.clone();
-        let key = self.file.path.clone();
+        let file_path = self.file.path.clone();
 
         // once the async chunk file readers have been implemented this complexity can be removed
         let (tx, rx) = mpsc::channel();
@@ -237,6 +235,11 @@ impl ObjectReader for AmazonS3FileReader {
                     timeout_config,
                 )
                 .await;
+
+                let (bucket, key) = match file_path.split_once("/") {
+                    Some((bucket, prefix)) => (bucket, prefix),
+                    None => (file_path.as_str(), ""),
+                };
 
                 let get_object = client.get_object().bucket(bucket).key(key);
                 let resp = if length > 0 {
@@ -292,7 +295,6 @@ mod tests {
     const SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
     const PROVIDER_NAME: &str = "Static";
     const MINIO_ENDPOINT: &str = "http://localhost:9000";
-    const BUCKET: &str = "data";
 
     #[tokio::test]
     async fn test_read_files() -> Result<()> {
@@ -309,11 +311,10 @@ mod tests {
             None,
             None,
             None,
-            BUCKET,
         )
         .await;
 
-        let mut files = amazon_s3_file_system.list_file("").await?;
+        let mut files = amazon_s3_file_system.list_file("data").await?;
 
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
@@ -356,11 +357,10 @@ mod tests {
             None,
             None,
             None,
-            BUCKET,
         )
         .await;
         let mut files = amazon_s3_file_system
-            .list_file("alltypes_plain.snappy.parquet")
+            .list_file("data/alltypes_plain.snappy.parquet")
             .await?;
 
         if let Some(file) = files.next().await {
@@ -397,12 +397,11 @@ mod tests {
                 None,
                 None,
                 None,
-                BUCKET,
             )
             .await,
         );
 
-        let filename = "alltypes_plain.snappy.parquet";
+        let filename = "data/alltypes_plain.snappy.parquet";
 
         let listing_options = ListingOptions {
             format: Arc::new(ParquetFormat::default()),
@@ -445,12 +444,11 @@ mod tests {
                 None,
                 None,
                 None,
-                BUCKET,
             )
             .await,
         );
 
-        let filename = "alltypes_plain.snappy.parquet";
+        let filename = "data/alltypes_plain.snappy.parquet";
 
         let listing_options = ListingOptions {
             format: Arc::new(ParquetFormat::default()),
@@ -477,15 +475,61 @@ mod tests {
 
         let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
         let expected = vec![
-        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+", 
-        "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |", 
-        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+", 
-        "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01 00:00:00 |", 
-        "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |", 
+        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+        "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
+        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+        "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01 00:00:00 |",
+        "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
         "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
         ];
         assert_batches_eq!(&expected, &batches);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Could not parse metadata: bad data")]
+    async fn test_read_alternative_bucket() {
+        let amazon_s3_file_system = Arc::new(
+            AmazonS3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let filename = "bad_data/PARQUET-1481.parquet";
+
+        let listing_options = ListingOptions {
+            format: Arc::new(ParquetFormat::default()),
+            collect_stat: true,
+            file_extension: "parquet".to_owned(),
+            target_partitions: num_cpus::get(),
+            table_partition_cols: vec![],
+        };
+
+        let resolved_schema = listing_options
+            .infer_schema(amazon_s3_file_system.clone(), filename)
+            .await
+            .unwrap();
+
+        let table = ListingTable::new(
+            amazon_s3_file_system,
+            filename.to_owned(),
+            resolved_schema,
+            listing_options,
+        );
+
+        table.scan(&None, 1024, &[], None).await.unwrap();
     }
 }
