@@ -40,8 +40,9 @@ use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
 
 /// new_client creates a new aws_sdk_s3::Client
-/// at time of writing the aws_config::load_from_env() does not allow configuring the endpoint which is
-/// required for continuous integration testing and uses outside the AWS ecosystem
+/// this uses aws_config::load_from_env() as a base config then allows users to override specific settings if required
+///
+/// an example use case for overriding is to specify an endpoint which is not Amazon S3 such as MinIO or Ceph.
 async fn new_client(
     credentials_provider: Option<SharedCredentialsProvider>,
     region: Option<Region>,
@@ -282,9 +283,11 @@ impl ObjectReader for AmazonS3FileReader {
 mod tests {
     use super::*;
     use aws_types::credentials::Credentials;
+    use datafusion::assert_batches_eq;
     use datafusion::datasource::file_format::parquet::ParquetFormat;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
+    use datafusion::prelude::ExecutionContext;
     use futures::StreamExt;
     use http::Uri;
 
@@ -421,6 +424,65 @@ mod tests {
 
         let exec = table.scan(&None, 1024, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(2));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sql_query() -> Result<()> {
+        let amazon_s3_file_system = Arc::new(
+            AmazonS3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let filename = "data/alltypes_plain.snappy.parquet";
+
+        let listing_options = ListingOptions {
+            format: Arc::new(ParquetFormat::default()),
+            collect_stat: true,
+            file_extension: "parquet".to_owned(),
+            target_partitions: num_cpus::get(),
+            table_partition_cols: vec![],
+        };
+
+        let resolved_schema = listing_options
+            .infer_schema(amazon_s3_file_system.clone(), filename)
+            .await?;
+
+        let table = ListingTable::new(
+            amazon_s3_file_system,
+            filename.to_owned(),
+            resolved_schema,
+            listing_options,
+        );
+
+        let mut ctx = ExecutionContext::new();
+
+        ctx.register_table("tbl", Arc::new(table))?;
+
+        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
+        let expected = vec![
+        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+        "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
+        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+        "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01 00:00:00 |",
+        "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
+        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
+        ];
+        assert_batches_eq!(&expected, &batches);
 
         Ok(())
     }

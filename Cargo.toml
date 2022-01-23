@@ -1,21 +1,22 @@
 [package]
+edition = "2021"
 name = "datafusion-objectstore-s3"
 version = "0.1.0"
-edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+arrow = "6.0.0"
 async-trait = "0.1.52"
 aws-config = "0.5.2"
 aws-sdk-s3 = "0.5.2"
 aws-smithy-async = "0.35.2"
 aws-smithy-types = "0.35.2"
-aws-smithy-types-convert = { version = "0", features = ["convert-chrono"] }
+aws-smithy-types-convert = {version = "0", features = ["convert-chrono"]}
 aws-types = "0.5.2"
 bytes = "1.1.0"
 datafusion = "6.0.0"
 futures = "0.3.19"
 http = "0.2.6"
 num_cpus = "1.13.1"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"] }
+tokio = {version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"]}
