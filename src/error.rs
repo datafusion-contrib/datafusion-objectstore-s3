@@ -32,6 +32,3 @@ impl Display for S3Error {
 }
 
 impl Error for S3Error {}
-
-/// Typedef for a [`std::result::Result`] of an [`S3Error`].
-pub type Result<T> = std::result::Result<T, S3Error>;

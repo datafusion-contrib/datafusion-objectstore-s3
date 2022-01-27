@@ -7,7 +7,6 @@ version = "0.1.0"
 
 [dependencies]
 arrow = {version = "8.0.0", features = ["prettyprint"]}
-# arrow = {git = "https://github.com/apache/arrow-rs", rev = "fb581f30572e1237223209a88b395fc26ffa9a18", features = ["prettyprint"]}
 async-trait = "0.1.52"
 aws-config = "0.5.2"
 aws-sdk-s3 = "0.5.2"
