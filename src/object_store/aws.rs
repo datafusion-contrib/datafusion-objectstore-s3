@@ -28,8 +28,7 @@ use datafusion::datasource::object_store::SizedFile;
 use datafusion::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
-use datafusion::error::DataFusionError;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
@@ -38,6 +37,8 @@ use aws_smithy_types::timeout::TimeoutConfig;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
+
+use crate::error::S3Error;
 
 /// new_client creates a new aws_sdk_s3::Client
 /// this uses aws_config::load_from_env() as a base config then allows users to override specific settings if required
@@ -131,7 +132,7 @@ impl ObjectStore for AmazonS3FileSystem {
             .prefix(prefix)
             .send()
             .await
-            .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))?
+            .map_err(|err| DataFusionError::External(Box::new(S3Error::AWS(format!("{:?}", err)))))?
             .contents()
             .unwrap_or_default()
             .to_vec();
@@ -257,19 +258,24 @@ impl ObjectReader for AmazonS3FileReader {
                         let data = res.body.collect().await;
                         match data {
                             Ok(data) => Ok(data.into_bytes()),
-                            Err(err) => Err(DataFusionError::Internal(format!("{:?}", err))),
+                            Err(err) => Err(DataFusionError::External(Box::new(S3Error::AWS(
+                                format!("{:?}", err),
+                            )))),
                         }
                     }
-                    Err(err) => Err(DataFusionError::Internal(format!("{:?}", err))),
+                    Err(err) => Err(DataFusionError::External(Box::new(S3Error::AWS(format!(
+                        "{:?}",
+                        err
+                    ))))),
                 };
 
                 tx.send(bytes).unwrap();
             })
         });
 
-        let bytes = rx
-            .recv_timeout(Duration::from_secs(10))
-            .map_err(|err| DataFusionError::Internal(format!("{:?}", err)))??;
+        let bytes = rx.recv_timeout(Duration::from_secs(10)).map_err(|err| {
+            DataFusionError::External(Box::new(S3Error::AWS(format!("{:?}", err))))
+        })??;
 
         Ok(Box::new(bytes.reader()))
     }
@@ -422,7 +428,7 @@ mod tests {
             listing_options,
         );
 
-        let exec = table.scan(&None, 1024, &[], None).await?;
+        let exec = table.scan(&None, &[], Some(1024)).await?;
         assert_eq!(exec.statistics().num_rows, Some(2));
 
         Ok(())
@@ -471,7 +477,7 @@ mod tests {
 
         let mut ctx = ExecutionContext::new();
 
-        ctx.register_table("tbl", Arc::new(table))?;
+        ctx.register_table("tbl", Arc::new(table)).unwrap();
 
         let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
         let expected = vec![
@@ -482,8 +488,7 @@ mod tests {
         "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
         "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
         ];
-        assert_batches_eq!(&expected, &batches);
-
+        assert_batches_eq!(expected, &batches);
         Ok(())
     }
 
@@ -530,6 +535,6 @@ mod tests {
             listing_options,
         );
 
-        table.scan(&None, 1024, &[], None).await.unwrap();
+        table.scan(&None, &[], Some(1024)).await.unwrap();
     }
 }
