@@ -6,7 +6,7 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow = {"6.0.0" , features = ["prettyprint"]}
+arrow = {version = "6.0.0", features = ["prettyprint"]}
 async-trait = "0.1.52"
 aws-config = "0.5.2"
 aws-sdk-s3 = "0.5.2"

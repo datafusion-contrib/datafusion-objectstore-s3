@@ -428,7 +428,7 @@ mod tests {
             listing_options,
         );
 
-        let exec = table.scan(&None, 1024, &[]).await?;
+        let exec = table.scan(&None, &[], Some(1024)).await?;
         assert_eq!(exec.statistics().num_rows, Some(2));
 
         Ok(())
@@ -479,7 +479,7 @@ mod tests {
 
         ctx.register_table("tbl", Arc::new(table))?;
 
-        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
+        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await;
         let expected = vec![
         "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
         "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
@@ -488,7 +488,7 @@ mod tests {
         "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
         "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
         ];
-        assert_batches_eq!(&expected, &batches);
+        assert_batches_eq!(expected, &batches);
 
         Ok(())
     }
@@ -536,6 +536,6 @@ mod tests {
             listing_options,
         );
 
-        table.scan(&None, 1024, &[], None).await.unwrap();
+        table.scan(&None, &[], Some(1024)).await.unwrap();
     }
 }
