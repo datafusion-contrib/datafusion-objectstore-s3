@@ -428,7 +428,7 @@ mod tests {
             listing_options,
         );
 
-        let exec = table.scan(&None, 1024, &[], None).await?;
+        let exec = table.scan(&None, 1024, &[]).await?;
         assert_eq!(exec.statistics().num_rows, Some(2));
 
         Ok(())
