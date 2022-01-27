@@ -479,7 +479,7 @@ mod tests {
 
         ctx.register_table("tbl", Arc::new(table))?;
 
-        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await;
+        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
         let expected = vec![
         "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
         "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
