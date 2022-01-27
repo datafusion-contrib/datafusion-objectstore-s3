@@ -435,7 +435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sql_query() {
+    async fn test_sql_query() -> Result<()> {
         let amazon_s3_file_system = Arc::new(
             AmazonS3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
@@ -466,8 +466,7 @@ mod tests {
 
         let resolved_schema = listing_options
             .infer_schema(amazon_s3_file_system.clone(), filename)
-            .await
-            .unwrap();
+            .await?;
 
         let table = ListingTable::new(
             amazon_s3_file_system,
@@ -480,13 +479,7 @@ mod tests {
 
         ctx.register_table("tbl", Arc::new(table)).unwrap();
 
-        let batches = ctx
-            .sql("SELECT * FROM tbl")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
+        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
         let expected = vec![
         "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
         "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
@@ -496,6 +489,7 @@ mod tests {
         "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
         ];
         assert_batches_eq!(expected, &batches);
+        Ok(())
     }
 
     #[tokio::test]
