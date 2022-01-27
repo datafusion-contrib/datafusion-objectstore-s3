@@ -38,7 +38,7 @@ use aws_smithy_types_convert::date_time::DateTimeExt;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
 
-// use crate::error::{Result, S3Error};
+use crate::error::S3Error;
 
 /// new_client creates a new aws_sdk_s3::Client
 /// this uses aws_config::load_from_env() as a base config then allows users to override specific settings if required
@@ -132,7 +132,7 @@ impl ObjectStore for AmazonS3FileSystem {
             .prefix(prefix)
             .send()
             .await
-            .map_err(|err| S3Error::AWS(format!("{:?}", err)))?
+            .map_err(|err| DataFusionError::External(Box::new(S3Error::AWS(format!("{:?}", err)))))?
             .contents()
             .unwrap_or_default()
             .to_vec();
@@ -258,19 +258,24 @@ impl ObjectReader for AmazonS3FileReader {
                         let data = res.body.collect().await;
                         match data {
                             Ok(data) => Ok(data.into_bytes()),
-                            Err(err) => Err(S3Error::AWS(format!("{:?}", err))),
+                            Err(err) => Err(DataFusionError::External(Box::new(S3Error::AWS(
+                                format!("{:?}", err),
+                            )))),
                         }
                     }
-                    Err(err) => Err(S3Error::AWS(format!("{:?}", err))),
+                    Err(err) => Err(DataFusionError::External(Box::new(S3Error::AWS(format!(
+                        "{:?}",
+                        err
+                    ))))),
                 };
 
                 tx.send(bytes).unwrap();
             })
         });
 
-        let bytes = rx
-            .recv_timeout(Duration::from_secs(10))
-            .map_err(|err| S3Error::AWS(format!("{:?}", err)))??;
+        let bytes = rx.recv_timeout(Duration::from_secs(10)).map_err(|err| {
+            DataFusionError::External(Box::new(S3Error::AWS(format!("{:?}", err))))
+        })??;
 
         Ok(Box::new(bytes.reader()))
     }

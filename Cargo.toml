@@ -15,7 +15,7 @@ aws-smithy-types = "0.35.2"
 aws-smithy-types-convert = {version = "0", features = ["convert-chrono"]}
 aws-types = "0.5.2"
 bytes = "1.1.0"
-datafusion = "6.0.0"
+datafusion = {git = "https://github.com/apache/arrow-datafusion", rev = "7b8d72c5342610a40827f23df7d5604cf24133fd"}
 futures = "0.3.19"
 http = "0.2.6"
 num_cpus = "1.13.1"
