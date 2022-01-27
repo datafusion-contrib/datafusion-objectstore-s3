@@ -18,7 +18,6 @@
 //! ObjectStore implementation for the Amazon S3 API
 
 use std::io::Read;
-use std::str::FromStr;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -32,55 +31,53 @@ use datafusion::datasource::object_store::{
 use datafusion::error::{DataFusionError, Result};
 
 use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_s3::{Client, Config, Endpoint, Region, RetryConfig};
+use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
+use aws_smithy_async::rt::sleep::AsyncSleep;
 use aws_smithy_types::timeout::TimeoutConfig;
 use aws_smithy_types_convert::date_time::DateTimeExt;
-use aws_types::credentials::Credentials;
+use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
-use http::Uri;
 
 // use crate::error::{Result, S3Error};
 
 /// new_client creates a new aws_sdk_s3::Client
-/// at time of writing the aws_config::load_from_env() does not allow configuring the endpoint which is
-/// required for continuous integration testing and uses outside the AWS ecosystem
+/// this uses aws_config::load_from_env() as a base config then allows users to override specific settings if required
+///
+/// an example use case for overriding is to specify an endpoint which is not Amazon S3 such as MinIO or Ceph.
 async fn new_client(
-    region: Option<String>,
-    endpoint: Option<String>,
-    retry_max_attempts: Option<u32>,
-    api_call_attempt_timeout_seconds: Option<u64>,
-    access_key: Option<String>,
-    secret_key: Option<String>,
+    credentials_provider: Option<SharedCredentialsProvider>,
+    region: Option<Region>,
+    endpoint: Option<Endpoint>,
+    retry_config: Option<RetryConfig>,
+    sleep: Option<Arc<dyn AsyncSleep>>,
+    timeout_config: Option<TimeoutConfig>,
 ) -> Client {
-    let region_provider = RegionProviderChain::first_try(region.map(Region::new))
-        .or_default_provider()
-        .or_else(Region::new("us-west-2"))
-        .region()
-        .await;
+    let config = aws_config::load_from_env().await;
 
-    let mut config_builder = Config::builder().region(region_provider);
+    let region_provider = RegionProviderChain::first_try(region)
+        .or_default_provider()
+        .or_else(Region::new("us-west-2"));
+
+    let mut config_builder = Builder::from(&config).region(region_provider.region().await);
+
+    if let Some(credentials_provider) = credentials_provider {
+        config_builder = config_builder.credentials_provider(credentials_provider);
+    }
 
     if let Some(endpoint) = endpoint {
-        config_builder = config_builder
-            .endpoint_resolver(Endpoint::immutable(Uri::from_str(&endpoint).unwrap()));
+        config_builder = config_builder.endpoint_resolver(endpoint);
     }
 
-    if let Some(retry_max_attempts) = retry_max_attempts {
-        config_builder =
-            config_builder.retry_config(RetryConfig::new().with_max_attempts(retry_max_attempts));
+    if let Some(retry_config) = retry_config {
+        config_builder = config_builder.retry_config(retry_config);
     }
 
-    if let Some(api_call_attempt_timeout_seconds) = api_call_attempt_timeout_seconds {
-        config_builder =
-            config_builder.timeout_config(TimeoutConfig::new().with_api_call_attempt_timeout(
-                Some(Duration::from_secs(api_call_attempt_timeout_seconds)),
-            ));
-    };
+    if let Some(sleep) = sleep {
+        config_builder = config_builder.sleep_impl(sleep);
+    }
 
-    if let (Some(access_key), Some(secret_key)) = (access_key, secret_key) {
-        config_builder = config_builder.credentials_provider(Credentials::new(
-            access_key, secret_key, None, None, "Static",
-        ));
+    if let Some(timeout_config) = timeout_config {
+        config_builder = config_builder.timeout_config(timeout_config);
     };
 
     let config = config_builder.build();
@@ -90,43 +87,32 @@ async fn new_client(
 #[derive(Debug)]
 // ObjectStore implementation for the Amazon S3 API
 pub struct AmazonS3FileSystem {
-    region: Option<String>,
-    endpoint: Option<String>,
-    retry_max_attempts: Option<u32>,
-    api_call_attempt_timeout_seconds: Option<u64>,
-    access_key: Option<String>,
-    secret_key: Option<String>,
-    bucket: String,
+    credentials_provider: Option<SharedCredentialsProvider>,
+    region: Option<Region>,
+    endpoint: Option<Endpoint>,
+    retry_config: Option<RetryConfig>,
+    sleep: Option<Arc<dyn AsyncSleep>>,
+    timeout_config: Option<TimeoutConfig>,
     client: Client,
 }
 
 impl AmazonS3FileSystem {
     pub async fn new(
-        region: Option<String>,
-        endpoint: Option<String>,
-        retry_max_attempts: Option<u32>,
-        api_call_attempt_timeout_seconds: Option<u64>,
-        access_key: Option<String>,
-        secret_key: Option<String>,
-        bucket: &str,
+        credentials_provider: Option<SharedCredentialsProvider>,
+        region: Option<Region>,
+        endpoint: Option<Endpoint>,
+        retry_config: Option<RetryConfig>,
+        sleep: Option<Arc<dyn AsyncSleep>>,
+        timeout_config: Option<TimeoutConfig>,
     ) -> Self {
         Self {
+            credentials_provider: credentials_provider.clone(),
             region: region.clone(),
             endpoint: endpoint.clone(),
-            retry_max_attempts,
-            api_call_attempt_timeout_seconds,
-            access_key: access_key.clone(),
-            secret_key: secret_key.clone(),
-            bucket: bucket.to_string(),
-            client: new_client(
-                region,
-                endpoint,
-                retry_max_attempts,
-                api_call_attempt_timeout_seconds,
-                access_key,
-                secret_key,
-            )
-            .await,
+            retry_config: retry_config.clone(),
+            sleep: sleep.clone(),
+            timeout_config: timeout_config.clone(),
+            client: new_client(credentials_provider, region, endpoint, None, None, None).await,
         }
     }
 }
@@ -134,10 +120,15 @@ impl AmazonS3FileSystem {
 #[async_trait]
 impl ObjectStore for AmazonS3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+        let (bucket, prefix) = match prefix.split_once("/") {
+            Some((bucket, prefix)) => (bucket.to_owned(), prefix),
+            None => (prefix.to_owned(), ""),
+        };
+
         let objects = self
             .client
             .list_objects_v2()
-            .bucket(&self.bucket)
+            .bucket(&bucket)
             .prefix(prefix)
             .send()
             .await
@@ -146,10 +137,10 @@ impl ObjectStore for AmazonS3FileSystem {
             .unwrap_or_default()
             .to_vec();
 
-        let result = stream::iter(objects.into_iter().map(|object| {
+        let result = stream::iter(objects.into_iter().map(move |object| {
             Ok(FileMeta {
                 sized_file: SizedFile {
-                    path: object.key().unwrap_or("").to_string(),
+                    path: format!("{}/{}", &bucket, object.key().unwrap_or("")),
                     size: object.size() as u64,
                 },
                 last_modified: object
@@ -167,49 +158,45 @@ impl ObjectStore for AmazonS3FileSystem {
 
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(AmazonS3FileReader::new(
+            self.credentials_provider.clone(),
             self.region.clone(),
             self.endpoint.clone(),
-            self.retry_max_attempts,
-            self.api_call_attempt_timeout_seconds,
-            self.access_key.clone(),
-            self.secret_key.clone(),
-            &self.bucket,
+            self.retry_config.clone(),
+            self.sleep.clone(),
+            self.timeout_config.clone(),
             file,
         )?))
     }
 }
 
 struct AmazonS3FileReader {
-    region: Option<String>,
-    endpoint: Option<String>,
-    retry_max_attempts: Option<u32>,
-    api_call_attempt_timeout_seconds: Option<u64>,
-    access_key: Option<String>,
-    secret_key: Option<String>,
-    bucket: String,
+    credentials_provider: Option<SharedCredentialsProvider>,
+    region: Option<Region>,
+    endpoint: Option<Endpoint>,
+    retry_config: Option<RetryConfig>,
+    sleep: Option<Arc<dyn AsyncSleep>>,
+    timeout_config: Option<TimeoutConfig>,
     file: SizedFile,
 }
 
 impl AmazonS3FileReader {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        region: Option<String>,
-        endpoint: Option<String>,
-        retry_max_attempts: Option<u32>,
-        api_call_attempt_timeout_seconds: Option<u64>,
-        access_key: Option<String>,
-        secret_key: Option<String>,
-        bucket: &str,
+        credentials_provider: Option<SharedCredentialsProvider>,
+        region: Option<Region>,
+        endpoint: Option<Endpoint>,
+        retry_config: Option<RetryConfig>,
+        sleep: Option<Arc<dyn AsyncSleep>>,
+        timeout_config: Option<TimeoutConfig>,
         file: SizedFile,
     ) -> Result<Self> {
         Ok(Self {
+            credentials_provider,
             region,
             endpoint,
-            retry_max_attempts,
-            api_call_attempt_timeout_seconds,
-            access_key,
-            secret_key,
-            bucket: bucket.to_string(),
+            retry_config,
+            sleep,
+            timeout_config,
             file,
         })
     }
@@ -222,14 +209,13 @@ impl ObjectReader for AmazonS3FileReader {
     }
 
     fn sync_chunk_reader(&self, start: u64, length: usize) -> Result<Box<dyn Read + Send + Sync>> {
+        let credentials_provider = self.credentials_provider.clone();
         let region = self.region.clone();
         let endpoint = self.endpoint.clone();
-        let retry_max_attempts = self.retry_max_attempts;
-        let api_call_attempt_timeout_seconds = self.api_call_attempt_timeout_seconds;
-        let access_key = self.access_key.clone();
-        let secret_key = self.secret_key.clone();
-        let bucket = self.bucket.clone();
-        let key = self.file.path.clone();
+        let retry_config = self.retry_config.clone();
+        let sleep = self.sleep.clone();
+        let timeout_config = self.timeout_config.clone();
+        let file_path = self.file.path.clone();
 
         // once the async chunk file readers have been implemented this complexity can be removed
         let (tx, rx) = mpsc::channel();
@@ -242,14 +228,19 @@ impl ObjectReader for AmazonS3FileReader {
             rt.block_on(async move {
                 // aws_sdk_s3::Client appears bound to the runtime and will deadlock if cloned from the main runtime
                 let client = new_client(
+                    credentials_provider,
                     region,
                     endpoint,
-                    retry_max_attempts,
-                    api_call_attempt_timeout_seconds,
-                    access_key,
-                    secret_key,
+                    retry_config,
+                    sleep,
+                    timeout_config,
                 )
                 .await;
+
+                let (bucket, key) = match file_path.split_once("/") {
+                    Some((bucket, prefix)) => (bucket, prefix),
+                    None => (file_path.as_str(), ""),
+                };
 
                 let get_object = client.get_object().bucket(bucket).key(key);
                 let resp = if length > 0 {
@@ -292,24 +283,39 @@ impl ObjectReader for AmazonS3FileReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_types::credentials::Credentials;
+    use datafusion::assert_batches_eq;
     use datafusion::datasource::file_format::parquet::ParquetFormat;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
+    use datafusion::prelude::ExecutionContext;
     use futures::StreamExt;
+    use http::Uri;
+
+    const ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
+    const SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    const PROVIDER_NAME: &str = "Static";
+    const MINIO_ENDPOINT: &str = "http://localhost:9000";
 
     #[tokio::test]
     async fn test_read_files() -> Result<()> {
         let amazon_s3_file_system = AmazonS3FileSystem::new(
+            Some(SharedCredentialsProvider::new(Credentials::new(
+                ACCESS_KEY_ID,
+                SECRET_ACCESS_KEY,
+                None,
+                None,
+                PROVIDER_NAME,
+            ))),
             None,
-            Some("http://localhost:9000".to_string()),
+            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
             None,
             None,
-            Some("AKIAIOSFODNN7EXAMPLE".to_string()),
-            Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
-            "data",
+            None,
         )
         .await;
-        let mut files = amazon_s3_file_system.list_file("").await?;
+
+        let mut files = amazon_s3_file_system.list_file("data").await?;
 
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
@@ -340,23 +346,28 @@ mod tests {
         assert_eq!(raw_slice.len(), length);
 
         let amazon_s3_file_system = AmazonS3FileSystem::new(
+            Some(SharedCredentialsProvider::new(Credentials::new(
+                ACCESS_KEY_ID,
+                SECRET_ACCESS_KEY,
+                None,
+                None,
+                PROVIDER_NAME,
+            ))),
             None,
-            Some("http://localhost:9000".to_string()),
+            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
             None,
             None,
-            Some("AKIAIOSFODNN7EXAMPLE".to_string()),
-            Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
-            "data",
+            None,
         )
         .await;
         let mut files = amazon_s3_file_system
-            .list_file("alltypes_plain.snappy.parquet")
+            .list_file("data/alltypes_plain.snappy.parquet")
             .await?;
 
         if let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
             let mut reader = amazon_s3_file_system
-                .file_reader(sized_file.clone())
+                .file_reader(sized_file)
                 .unwrap()
                 .sync_chunk_reader(start as u64, length)
                 .unwrap();
@@ -375,18 +386,23 @@ mod tests {
     async fn test_read_parquet() -> Result<()> {
         let amazon_s3_file_system = Arc::new(
             AmazonS3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
                 None,
-                Some("http://localhost:9000".to_string()),
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
                 None,
                 None,
-                Some("AKIAIOSFODNN7EXAMPLE".to_string()),
-                Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
-                "data",
+                None,
             )
             .await,
         );
 
-        let filename = "alltypes_plain.snappy.parquet";
+        let filename = "data/alltypes_plain.snappy.parquet";
 
         let listing_options = ListingOptions {
             format: Arc::new(ParquetFormat::default()),
@@ -411,5 +427,110 @@ mod tests {
         assert_eq!(exec.statistics().num_rows, Some(2));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sql_query() -> Result<()> {
+        let amazon_s3_file_system = Arc::new(
+            AmazonS3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let filename = "data/alltypes_plain.snappy.parquet";
+
+        let listing_options = ListingOptions {
+            format: Arc::new(ParquetFormat::default()),
+            collect_stat: true,
+            file_extension: "parquet".to_owned(),
+            target_partitions: num_cpus::get(),
+            table_partition_cols: vec![],
+        };
+
+        let resolved_schema = listing_options
+            .infer_schema(amazon_s3_file_system.clone(), filename)
+            .await?;
+
+        let table = ListingTable::new(
+            amazon_s3_file_system,
+            filename.to_owned(),
+            resolved_schema,
+            listing_options,
+        );
+
+        let mut ctx = ExecutionContext::new();
+
+        ctx.register_table("tbl", Arc::new(table))?;
+
+        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
+        let expected = vec![
+        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+        "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
+        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+        "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01 00:00:00 |",
+        "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
+        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
+        ];
+        assert_batches_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Could not parse metadata: bad data")]
+    async fn test_read_alternative_bucket() {
+        let amazon_s3_file_system = Arc::new(
+            AmazonS3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let filename = "bad_data/PARQUET-1481.parquet";
+
+        let listing_options = ListingOptions {
+            format: Arc::new(ParquetFormat::default()),
+            collect_stat: true,
+            file_extension: "parquet".to_owned(),
+            target_partitions: num_cpus::get(),
+            table_partition_cols: vec![],
+        };
+
+        let resolved_schema = listing_options
+            .infer_schema(amazon_s3_file_system.clone(), filename)
+            .await
+            .unwrap();
+
+        let table = ListingTable::new(
+            amazon_s3_file_system,
+            filename.to_owned(),
+            resolved_schema,
+            listing_options,
+        );
+
+        table.scan(&None, 1024, &[], None).await.unwrap();
     }
 }

@@ -48,20 +48,21 @@ jobs:
       - name: Setup minio
         run: |
           docker run \
+          --detach \
           --rm \
-          -p 9000:9000 \
-          -p 9001:9001 \
+          --publish 9000:9000 \
+          --publish 9001:9001 \
           --name minio \
-          -v "$(pwd)/parquet-testing:/data" \
-          -e "MINIO_ROOT_USER=AKIAIOSFODNN7EXAMPLE" \
-          -e "MINIO_ROOT_PASSWORD=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
+          --volume "$(pwd)/parquet-testing:/data" \
+          --env "MINIO_ROOT_USER=AKIAIOSFODNN7EXAMPLE" \
+          --env "MINIO_ROOT_PASSWORD=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
           quay.io/minio/minio server /data \
           --console-address ":9001"
       - name: Run tests
         run: |
           cargo test
   fmt:
-    name: fmt
+    name: Rust formatting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -73,7 +74,7 @@ jobs:
       - name: Run
         run: cargo fmt --all -- --check
   clippy:
-    name: clippy
+    name: Clippy
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -110,4 +111,3 @@ jobs:
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
-      
