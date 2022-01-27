@@ -21,7 +21,7 @@ impl From<io::Error> for S3Error {
 
 impl Display for S3Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match *self {
+        match self {
             S3Error::NotImplemented(desc) => write!(f, "Not yet implemented: {}", desc),
             S3Error::Io(desc) => {
                 write!(f, "IO error: {}", desc)
