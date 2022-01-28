@@ -537,4 +537,38 @@ mod tests {
 
         table.scan(&None, &[], Some(1024)).await.unwrap();
     }
+
+    #[tokio::test]
+    async fn test_ctx_register_object_store() -> Result<()> {
+        let amazon_s3_file_system = Arc::new(
+            AmazonS3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let ctx = ExecutionContext::new();
+
+        ctx.register_object_store("s3", amazon_s3_file_system);
+
+        let store = ctx.object_store("s3");
+
+        match store {
+            Ok(..) => assert!(true),
+            Err(_) => assert!(false),
+        };
+
+        Ok(())
+    }
 }
