@@ -2,7 +2,8 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 /// Enum with all errors in this crate.
-#[derive(Debug)]
+/// PartialEq is to enable testing for specific error types
+#[derive(Debug, PartialEq)]
 pub enum S3Error {
     /// Returned when functionaly is not yet available.
     NotImplemented(String),

@@ -571,4 +571,52 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn test_read_nonexistent_bucket() {
+        let amazon_s3_file_system = AmazonS3FileSystem::new(
+            Some(SharedCredentialsProvider::new(Credentials::new(
+                ACCESS_KEY_ID,
+                SECRET_ACCESS_KEY,
+                None,
+                None,
+                PROVIDER_NAME,
+            ))),
+            None,
+            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let mut files = amazon_s3_file_system
+            .list_file("nonexistent_data")
+            .await
+            .unwrap();
+
+        while let Some(file) = files.next().await {
+            let sized_file = file.unwrap().sized_file;
+            let mut reader = amazon_s3_file_system
+                .file_reader(sized_file.clone())
+                .unwrap()
+                .sync_chunk_reader(0, sized_file.size as usize)
+                .unwrap();
+
+            let mut bytes = Vec::new();
+            let size = reader.read_to_end(&mut bytes).unwrap();
+
+            assert_eq!(size as u64, sized_file.size);
+        }
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn test_read_nonexistent_range() {
+        let mut file =
+            std::fs::File::open("parquet-testing/data/nonexistent_data.snappy.parquet").unwrap();
+        let mut raw_bytes = Vec::new();
+        file.read_to_end(&mut raw_bytes).unwrap();
+    }
 }
