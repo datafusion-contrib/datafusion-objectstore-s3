@@ -608,11 +608,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic(expected = "File is missing")]
+    // #[should_panic(expected = "File is missing")]
     async fn test_read_nonexistent_range() {
-        let start = 10;
-        let length = 128;
-
         let amazon_s3_file_system = AmazonS3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
@@ -633,21 +630,6 @@ mod tests {
             .await
             .unwrap();
 
-        if let Some(file) = files.next().await {
-            let sized_file = file.unwrap().sized_file;
-            println!("{:?}", sized_file);
-            let mut reader = amazon_s3_file_system
-                .file_reader(sized_file)
-                .unwrap()
-                .sync_chunk_reader(start as u64, length)
-                .unwrap();
-
-            let mut reader_bytes = Vec::new();
-            let size = reader.read_to_end(&mut reader_bytes).unwrap();
-
-            assert_eq!(size, length);
-        } else {
-            panic!("File is missing")
-        }
+        assert!(files.next().await.is_none())
     }
 }
