@@ -302,7 +302,7 @@ mod tests {
     const PROVIDER_NAME: &str = "Static";
     const MINIO_ENDPOINT: &str = "http://localhost:9000";
 
-    // Test that `AmazonS#FileSystem` can read files
+    // Test that `AmazonS3FileSystem` can read files
     #[tokio::test]
     async fn test_read_files() -> Result<()> {
         let amazon_s3_file_system = AmazonS3FileSystem::new(
@@ -496,7 +496,7 @@ mod tests {
         Ok(())
     }
 
-    // Test that the appropriate error message is generated if a Parquet file with bad data is read
+    // Test that the AmazonS3FileSystem allows reading from different buckets
     #[tokio::test]
     #[should_panic(expected = "Could not parse metadata: bad data")]
     async fn test_read_alternative_bucket() {
