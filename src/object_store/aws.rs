@@ -309,6 +309,7 @@ mod tests {
     const PROVIDER_NAME: &str = "Static";
     const MINIO_ENDPOINT: &str = "http://localhost:9000";
 
+    // Test that `AmazonS3FileSystem` can read files
     #[tokio::test]
     async fn test_read_files() -> Result<()> {
         let amazon_s3_file_system = AmazonS3FileSystem::new(
@@ -346,6 +347,7 @@ mod tests {
         Ok(())
     }
 
+    // Test that reading files with `AmazonS3FileSystem` produces the expected results
     #[tokio::test]
     async fn test_read_range() -> Result<()> {
         let start = 10;
@@ -394,6 +396,7 @@ mod tests {
         Ok(())
     }
 
+    // Test that reading Parquet file with `AmazonS3FileSystem` can create a `ListingTable`
     #[tokio::test]
     async fn test_read_parquet() -> Result<()> {
         let amazon_s3_file_system = Arc::new(
@@ -441,6 +444,7 @@ mod tests {
         Ok(())
     }
 
+    // Test that a SQL query can be executed on a Parquet file that was read from `AmazonS3FileSystem`
     #[tokio::test]
     async fn test_sql_query() -> Result<()> {
         let amazon_s3_file_system = Arc::new(
@@ -499,6 +503,7 @@ mod tests {
         Ok(())
     }
 
+    // Test that the AmazonS3FileSystem allows reading from different buckets
     #[tokio::test]
     #[should_panic(expected = "Could not parse metadata: bad data")]
     async fn test_read_alternative_bucket() {
@@ -543,5 +548,102 @@ mod tests {
         );
 
         table.scan(&None, &[], Some(1024)).await.unwrap();
+    }
+
+    // Test that `AmazonS3FileSystem` can be registered as object store on a DataFusion `ExecutionContext`
+    #[tokio::test]
+    async fn test_ctx_register_object_store() -> Result<()> {
+        let amazon_s3_file_system = Arc::new(
+            AmazonS3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let ctx = ExecutionContext::new();
+
+        ctx.register_object_store("s3", amazon_s3_file_system);
+
+        let (_, name) = ctx.object_store("s3").unwrap();
+        assert_eq!(name, "s3");
+
+        Ok(())
+    }
+
+    // Test that an appropriate error message is produced for a non existent bucket
+    #[tokio::test]
+    #[should_panic(expected = "NoSuchBucket")]
+    async fn test_read_nonexistent_bucket() {
+        let amazon_s3_file_system = AmazonS3FileSystem::new(
+            Some(SharedCredentialsProvider::new(Credentials::new(
+                ACCESS_KEY_ID,
+                SECRET_ACCESS_KEY,
+                None,
+                None,
+                PROVIDER_NAME,
+            ))),
+            None,
+            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let mut files = amazon_s3_file_system
+            .list_file("nonexistent_data")
+            .await
+            .unwrap();
+
+        while let Some(file) = files.next().await {
+            let sized_file = file.unwrap().sized_file;
+            let mut reader = amazon_s3_file_system
+                .file_reader(sized_file.clone())
+                .unwrap()
+                .sync_chunk_reader(0, sized_file.size as usize)
+                .unwrap();
+
+            let mut bytes = Vec::new();
+            let size = reader.read_to_end(&mut bytes).unwrap();
+
+            assert_eq!(size as u64, sized_file.size);
+        }
+    }
+
+    // Test that no files are returned if a non existent file URI is provided
+    #[tokio::test]
+    async fn test_read_nonexistent_file() {
+        let amazon_s3_file_system = AmazonS3FileSystem::new(
+            Some(SharedCredentialsProvider::new(Credentials::new(
+                ACCESS_KEY_ID,
+                SECRET_ACCESS_KEY,
+                None,
+                None,
+                PROVIDER_NAME,
+            ))),
+            None,
+            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+            None,
+            None,
+            None,
+        )
+        .await;
+        let mut files = amazon_s3_file_system
+            .list_file("data/nonexistent_file.txt")
+            .await
+            .unwrap();
+
+        assert!(files.next().await.is_none())
     }
 }
