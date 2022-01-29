@@ -562,12 +562,8 @@ mod tests {
 
         ctx.register_object_store("s3", amazon_s3_file_system);
 
-        let store = ctx.object_store("s3");
-
-        match store {
-            Ok(..) => assert!(true),
-            Err(_) => assert!(false),
-        };
+        let (_, name) = ctx.object_store("s3").unwrap();
+        assert_eq!(name, "s3");
 
         Ok(())
     }
