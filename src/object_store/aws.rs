@@ -573,7 +573,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic]
+    #[should_panic(expected = "NoSuchBucket")]
     async fn test_read_nonexistent_bucket() {
         let amazon_s3_file_system = AmazonS3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
@@ -612,11 +612,44 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic]
+    #[should_panic(expected = "Could not parse metadata: bad data")]
     async fn test_read_nonexistent_range() {
-        let mut file =
-            std::fs::File::open("parquet-testing/data/nonexistent_data.snappy.parquet").unwrap();
-        let mut raw_bytes = Vec::new();
-        file.read_to_end(&mut raw_bytes).unwrap();
+        let start = 10;
+        let length = 128;
+
+        let amazon_s3_file_system = AmazonS3FileSystem::new(
+            Some(SharedCredentialsProvider::new(Credentials::new(
+                ACCESS_KEY_ID,
+                SECRET_ACCESS_KEY,
+                None,
+                None,
+                PROVIDER_NAME,
+            ))),
+            None,
+            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+            None,
+            None,
+            None,
+        )
+        .await;
+        let mut files = amazon_s3_file_system
+            .list_file("data/nonexistent_file.txt")
+            .await
+            .unwrap();
+
+        if let Some(file) = files.next().await {
+            let sized_file = file.unwrap().sized_file;
+            println!("{:?}", sized_file);
+            let mut reader = amazon_s3_file_system
+                .file_reader(sized_file)
+                .unwrap()
+                .sync_chunk_reader(start as u64, length)
+                .unwrap();
+
+            let mut reader_bytes = Vec::new();
+            let size = reader.read_to_end(&mut reader_bytes).unwrap();
+
+            assert_eq!(size, length);
+        }
     }
 }
