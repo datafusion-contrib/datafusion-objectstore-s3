@@ -1,13 +1,18 @@
-# datafusion-objectstore-s3
+# DataFusion-ObjectStore-S3
 
-Enable S3 as an ObjectStore for Datafusion
+Enable S3 as an ObjectStore for [Datafusion](https://github.com/apache/arrow-datafusion).
 
 ## Querying files on S3 with DataFusion
 
-This crate can be used for interacting with both AWS S3 and implementers of the S3 standard. Examples for querying AWS and other implementors, such as MinIO, are shown below.
+This crate implements the DataFusion `ObjectStore` trait on AWS S3 and implementers of the S3 standard. We leverage the official [AWS Rust Sdk](https://github.com/awslabs/aws-sdk-rust) for interacting with S3. While it is our understanding that the AWS APIs we are using a relatively stable, we can make no assurances on API stability either on AWS' part or within this crate. This crates API is tightly connected with DataFusion, a fast moving project, and as such we will make changes inline with those upstream changes.
+
+## Examples
+
+Examples for querying AWS and other implementors, such as MinIO, are shown below.
+
+Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
 
 ```rust
-// Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
 let amazon_s3_file_system = Arc::new(
     AmazonS3FileSystem::new(
         None,
@@ -21,13 +26,15 @@ let amazon_s3_file_system = Arc::new(
 );
 ```
 
+Connect to implementor of S3 API (MinIO, in this case) use access key and secret.
+
 ```rust
+// Example credentials provided by MinIO
 const ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 const SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 const PROVIDER_NAME: &str = "Static";
 const MINIO_ENDPOINT: &str = "http://localhost:9000";
 
-// Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
 let amazon_s3_file_system = AmazonS3FileSystem::new(
     Some(SharedCredentialsProvider::new(Credentials::new(
         MINIO_ACCESS_KEY_ID,
@@ -44,6 +51,8 @@ let amazon_s3_file_system = AmazonS3FileSystem::new(
 )
 .await;
 ```
+
+Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
 
 ```rust
 let filename = "data/alltypes_plain.snappy.parquet";
