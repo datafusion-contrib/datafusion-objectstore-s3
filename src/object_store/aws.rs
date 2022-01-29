@@ -608,7 +608,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic(expected = "Could not parse metadata: bad data")]
+    #[should_panic(expected = "File is missing")]
     async fn test_read_nonexistent_range() {
         let start = 10;
         let length = 128;
@@ -646,6 +646,8 @@ mod tests {
             let size = reader.read_to_end(&mut reader_bytes).unwrap();
 
             assert_eq!(size, length);
+        } else {
+            panic!("File is missing")
         }
     }
 }
