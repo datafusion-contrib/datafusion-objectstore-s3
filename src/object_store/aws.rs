@@ -169,6 +169,13 @@ impl ObjectStore for AmazonS3FileSystem {
     }
 }
 
+#[allow(dead_code)]
+impl AmazonS3FileSystem {
+    async fn default() -> Self {
+        AmazonS3FileSystem::new(None, None, None, None, None, None).await
+    }
+}
+
 struct AmazonS3FileReader {
     credentials_provider: Option<SharedCredentialsProvider>,
     region: Option<Region>,
