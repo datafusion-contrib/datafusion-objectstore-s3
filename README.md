@@ -13,7 +13,7 @@ Examples for querying AWS and other implementors, such as MinIO, are shown below
 Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
 
 ```rust
-let amazon_s3_file_system = Arc::new(S3FileSystem::default().await);
+let s3_file_system = Arc::new(S3FileSystem::default().await);
 ```
 
 `S3FileSystem::default()` is a convenience wrapper for `S3FileSystem::new(None, None, None, None, None, None)`.
@@ -27,7 +27,7 @@ const SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 const PROVIDER_NAME: &str = "Static";
 const MINIO_ENDPOINT: &str = "http://localhost:9000";
 
-let amazon_s3_file_system = S3FileSystem::new(
+let s3_file_system = S3FileSystem::new(
     Some(SharedCredentialsProvider::new(Credentials::new(
         MINIO_ACCESS_KEY_ID,
         MINIO_SECRET_ACCESS_KEY,
@@ -58,11 +58,11 @@ let listing_options = ListingOptions {
 };
 
 let resolved_schema = listing_options
-    .infer_schema(amazon_s3_file_system.clone(), filename)
+    .infer_schema(s3_file_system.clone(), filename)
     .await?;
 
 let table = ListingTable::new(
-    amazon_s3_file_system,
+    s3_file_system,
     filename.to_owned(),
     resolved_schema,
     listing_options,
