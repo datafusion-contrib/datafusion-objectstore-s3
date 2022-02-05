@@ -312,7 +312,7 @@ mod tests {
     // Test that `S3FileSystem` can read files
     #[tokio::test]
     async fn test_read_files() -> Result<()> {
-        let amazon_s3_file_system = S3FileSystem::new(
+        let s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
@@ -328,11 +328,11 @@ mod tests {
         )
         .await;
 
-        let mut files = amazon_s3_file_system.list_file("data").await?;
+        let mut files = s3_file_system.list_file("data").await?;
 
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
-            let mut reader = amazon_s3_file_system
+            let mut reader = s3_file_system
                 .file_reader(sized_file.clone())
                 .unwrap()
                 .sync_chunk_reader(0, sized_file.size as usize)
@@ -359,7 +359,7 @@ mod tests {
         let raw_slice = &raw_bytes[start..start + length];
         assert_eq!(raw_slice.len(), length);
 
-        let amazon_s3_file_system = S3FileSystem::new(
+        let s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
@@ -374,13 +374,13 @@ mod tests {
             None,
         )
         .await;
-        let mut files = amazon_s3_file_system
+        let mut files = s3_file_system
             .list_file("data/alltypes_plain.snappy.parquet")
             .await?;
 
         if let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
-            let mut reader = amazon_s3_file_system
+            let mut reader = s3_file_system
                 .file_reader(sized_file)
                 .unwrap()
                 .sync_chunk_reader(start as u64, length)
@@ -399,7 +399,7 @@ mod tests {
     // Test that reading Parquet file with `S3FileSystem` can create a `ListingTable`
     #[tokio::test]
     async fn test_read_parquet() -> Result<()> {
-        let amazon_s3_file_system = Arc::new(
+        let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
                     ACCESS_KEY_ID,
@@ -428,11 +428,11 @@ mod tests {
         };
 
         let resolved_schema = listing_options
-            .infer_schema(amazon_s3_file_system.clone(), filename)
+            .infer_schema(s3_file_system.clone(), filename)
             .await?;
 
         let table = ListingTable::new(
-            amazon_s3_file_system,
+            s3_file_system,
             filename.to_owned(),
             resolved_schema,
             listing_options,
@@ -447,7 +447,7 @@ mod tests {
     // Test that a SQL query can be executed on a Parquet file that was read from `S3FileSystem`
     #[tokio::test]
     async fn test_sql_query() -> Result<()> {
-        let amazon_s3_file_system = Arc::new(
+        let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
                     ACCESS_KEY_ID,
@@ -476,11 +476,11 @@ mod tests {
         };
 
         let resolved_schema = listing_options
-            .infer_schema(amazon_s3_file_system.clone(), filename)
+            .infer_schema(s3_file_system.clone(), filename)
             .await?;
 
         let table = ListingTable::new(
-            amazon_s3_file_system,
+            s3_file_system,
             filename.to_owned(),
             resolved_schema,
             listing_options,
@@ -507,7 +507,7 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "Could not parse metadata: bad data")]
     async fn test_read_alternative_bucket() {
-        let amazon_s3_file_system = Arc::new(
+        let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
                     ACCESS_KEY_ID,
@@ -536,12 +536,12 @@ mod tests {
         };
 
         let resolved_schema = listing_options
-            .infer_schema(amazon_s3_file_system.clone(), filename)
+            .infer_schema(s3_file_system.clone(), filename)
             .await
             .unwrap();
 
         let table = ListingTable::new(
-            amazon_s3_file_system,
+            s3_file_system,
             filename.to_owned(),
             resolved_schema,
             listing_options,
@@ -553,7 +553,7 @@ mod tests {
     // Test that `S3FileSystem` can be registered as object store on a DataFusion `ExecutionContext`
     #[tokio::test]
     async fn test_ctx_register_object_store() -> Result<()> {
-        let amazon_s3_file_system = Arc::new(
+        let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
                     ACCESS_KEY_ID,
@@ -573,7 +573,7 @@ mod tests {
 
         let ctx = ExecutionContext::new();
 
-        ctx.register_object_store("s3", amazon_s3_file_system);
+        ctx.register_object_store("s3", s3_file_system);
 
         let (_, name) = ctx.object_store("s3").unwrap();
         assert_eq!(name, "s3");
@@ -585,7 +585,7 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "NoSuchBucket")]
     async fn test_read_nonexistent_bucket() {
-        let amazon_s3_file_system = S3FileSystem::new(
+        let s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
@@ -601,14 +601,11 @@ mod tests {
         )
         .await;
 
-        let mut files = amazon_s3_file_system
-            .list_file("nonexistent_data")
-            .await
-            .unwrap();
+        let mut files = s3_file_system.list_file("nonexistent_data").await.unwrap();
 
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
-            let mut reader = amazon_s3_file_system
+            let mut reader = s3_file_system
                 .file_reader(sized_file.clone())
                 .unwrap()
                 .sync_chunk_reader(0, sized_file.size as usize)
@@ -624,7 +621,7 @@ mod tests {
     // Test that no files are returned if a non existent file URI is provided
     #[tokio::test]
     async fn test_read_nonexistent_file() {
-        let amazon_s3_file_system = S3FileSystem::new(
+        let s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
@@ -639,7 +636,7 @@ mod tests {
             None,
         )
         .await;
-        let mut files = amazon_s3_file_system
+        let mut files = s3_file_system
             .list_file("data/nonexistent_file.txt")
             .await
             .unwrap();
