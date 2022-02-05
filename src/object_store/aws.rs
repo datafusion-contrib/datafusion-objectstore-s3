@@ -86,7 +86,7 @@ async fn new_client(
 
 #[derive(Debug)]
 // ObjectStore implementation for the Amazon S3 API
-pub struct AmazonS3FileSystem {
+pub struct S3FileSystem {
     credentials_provider: Option<SharedCredentialsProvider>,
     region: Option<Region>,
     endpoint: Option<Endpoint>,
@@ -96,7 +96,7 @@ pub struct AmazonS3FileSystem {
     client: Client,
 }
 
-impl AmazonS3FileSystem {
+impl S3FileSystem {
     pub async fn new(
         credentials_provider: Option<SharedCredentialsProvider>,
         region: Option<Region>,
@@ -118,7 +118,7 @@ impl AmazonS3FileSystem {
 }
 
 #[async_trait]
-impl ObjectStore for AmazonS3FileSystem {
+impl ObjectStore for S3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
         let (bucket, prefix) = match prefix.split_once("/") {
             Some((bucket, prefix)) => (bucket.to_owned(), prefix),
@@ -170,9 +170,9 @@ impl ObjectStore for AmazonS3FileSystem {
 }
 
 #[allow(dead_code)]
-impl AmazonS3FileSystem {
+impl S3FileSystem {
     pub async fn default() -> Self {
-        AmazonS3FileSystem::new(None, None, None, None, None, None).await
+        S3FileSystem::new(None, None, None, None, None, None).await
     }
 }
 
@@ -309,10 +309,10 @@ mod tests {
     const PROVIDER_NAME: &str = "Static";
     const MINIO_ENDPOINT: &str = "http://localhost:9000";
 
-    // Test that `AmazonS3FileSystem` can read files
+    // Test that `S3FileSystem` can read files
     #[tokio::test]
     async fn test_read_files() -> Result<()> {
-        let amazon_s3_file_system = AmazonS3FileSystem::new(
+        let amazon_s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
@@ -347,7 +347,7 @@ mod tests {
         Ok(())
     }
 
-    // Test that reading files with `AmazonS3FileSystem` produces the expected results
+    // Test that reading files with `S3FileSystem` produces the expected results
     #[tokio::test]
     async fn test_read_range() -> Result<()> {
         let start = 10;
@@ -359,7 +359,7 @@ mod tests {
         let raw_slice = &raw_bytes[start..start + length];
         assert_eq!(raw_slice.len(), length);
 
-        let amazon_s3_file_system = AmazonS3FileSystem::new(
+        let amazon_s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
@@ -396,11 +396,11 @@ mod tests {
         Ok(())
     }
 
-    // Test that reading Parquet file with `AmazonS3FileSystem` can create a `ListingTable`
+    // Test that reading Parquet file with `S3FileSystem` can create a `ListingTable`
     #[tokio::test]
     async fn test_read_parquet() -> Result<()> {
         let amazon_s3_file_system = Arc::new(
-            AmazonS3FileSystem::new(
+            S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
                     ACCESS_KEY_ID,
                     SECRET_ACCESS_KEY,
@@ -444,11 +444,11 @@ mod tests {
         Ok(())
     }
 
-    // Test that a SQL query can be executed on a Parquet file that was read from `AmazonS3FileSystem`
+    // Test that a SQL query can be executed on a Parquet file that was read from `S3FileSystem`
     #[tokio::test]
     async fn test_sql_query() -> Result<()> {
         let amazon_s3_file_system = Arc::new(
-            AmazonS3FileSystem::new(
+            S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
                     ACCESS_KEY_ID,
                     SECRET_ACCESS_KEY,
@@ -503,12 +503,12 @@ mod tests {
         Ok(())
     }
 
-    // Test that the AmazonS3FileSystem allows reading from different buckets
+    // Test that the S3FileSystem allows reading from different buckets
     #[tokio::test]
     #[should_panic(expected = "Could not parse metadata: bad data")]
     async fn test_read_alternative_bucket() {
         let amazon_s3_file_system = Arc::new(
-            AmazonS3FileSystem::new(
+            S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
                     ACCESS_KEY_ID,
                     SECRET_ACCESS_KEY,
@@ -550,11 +550,11 @@ mod tests {
         table.scan(&None, &[], Some(1024)).await.unwrap();
     }
 
-    // Test that `AmazonS3FileSystem` can be registered as object store on a DataFusion `ExecutionContext`
+    // Test that `S3FileSystem` can be registered as object store on a DataFusion `ExecutionContext`
     #[tokio::test]
     async fn test_ctx_register_object_store() -> Result<()> {
         let amazon_s3_file_system = Arc::new(
-            AmazonS3FileSystem::new(
+            S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
                     ACCESS_KEY_ID,
                     SECRET_ACCESS_KEY,
@@ -585,7 +585,7 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "NoSuchBucket")]
     async fn test_read_nonexistent_bucket() {
-        let amazon_s3_file_system = AmazonS3FileSystem::new(
+        let amazon_s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
@@ -624,7 +624,7 @@ mod tests {
     // Test that no files are returned if a non existent file URI is provided
     #[tokio::test]
     async fn test_read_nonexistent_file() {
-        let amazon_s3_file_system = AmazonS3FileSystem::new(
+        let amazon_s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
