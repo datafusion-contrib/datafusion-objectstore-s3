@@ -84,8 +84,8 @@ async fn new_client(
     Client::from_conf(config)
 }
 
+/// `ObjectStore` implementation for the Amazon S3 API
 #[derive(Debug)]
-// ObjectStore implementation for the Amazon S3 API
 pub struct S3FileSystem {
     credentials_provider: Option<SharedCredentialsProvider>,
     region: Option<Region>,
@@ -97,6 +97,7 @@ pub struct S3FileSystem {
 }
 
 impl S3FileSystem {
+    /// Create new `ObjectStore`
     pub async fn new(
         credentials_provider: Option<SharedCredentialsProvider>,
         region: Option<Region>,
@@ -171,6 +172,7 @@ impl ObjectStore for S3FileSystem {
 
 #[allow(dead_code)]
 impl S3FileSystem {
+    /// Convenience wrapper for creating a new `S3FileSystem` using default configuration options.  Only works with AWS.
     pub async fn default() -> Self {
         S3FileSystem::new(None, None, None, None, None, None).await
     }
