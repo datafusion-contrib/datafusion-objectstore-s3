@@ -151,45 +151,52 @@
 //! We can also register the `S3FileSystem` directly as an `ObjectStore` on an `ExecutionContext`. This provides an idiomatic way of creating `TableProviders` that can be queried.
 //!
 //! ```rust
-//! # use std::sync::Arc;
-//! # use datafusion::datasource::listing::*;
-//! # use datafusion::datasource::TableProvider;
-//! # use datafusion::prelude::ExecutionContext;
-//! # use datafusion::datasource::file_format::parquet::ParquetFormat;
-//! # use datafusion::datasource::object_store::ObjectStore;
-//! # use datafusion::error::Result;
-//! # use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
-//! # use aws_types::credentials::SharedCredentialsProvider;
-//! # use aws_types::credentials::Credentials;
-//! # use aws_sdk_s3::Endpoint;
-//! # use http::Uri;
+//! use std::sync::Arc;
+//!
+//! use datafusion::datasource::listing::*;
+//! use datafusion::datasource::TableProvider;
+//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::datasource::file_format::parquet::ParquetFormat;
+//! use datafusion::error::Result;
+//!
+//! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
+//!
+//! use aws_types::credentials::SharedCredentialsProvider;
+//! use aws_types::credentials::Credentials;
+//! use aws_sdk_s3::Endpoint;
+//! use http::Uri;
+//!
 //! # const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 //! # const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 //! # const PROVIDER_NAME: &str = "Static";
 //! # const MINIO_ENDPOINT: &str = "http://localhost:9000";
+//!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
+//!
+//! # let s3_file_system = Arc::new(S3FileSystem::new(
+//! #     Some(SharedCredentialsProvider::new(Credentials::new(
+//! #         MINIO_ACCESS_KEY_ID,
+//! #         MINIO_SECRET_ACCESS_KEY,
+//! #         None,
+//! #         None,
+//! #         PROVIDER_NAME,
+//! #     ))),
+//! #     None,
+//! #     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+//! #     None,
+//! #     None,
+//! #     None,
+//! # )
+//! # .await);
+//!
 //! let mut ctx = ExecutionContext::new();
-//! let s3_file_system = S3FileSystem::new(
-//!     Some(SharedCredentialsProvider::new(Credentials::new(
-//!         MINIO_ACCESS_KEY_ID,
-//!         MINIO_SECRET_ACCESS_KEY,
-//!         None,
-//!         None,
-//!         PROVIDER_NAME,
-//!     ))),
-//!     None,
-//!     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-//!     None,
-//!     None,
-//!     None,
-//! )
-//! .await;
-//! ctx.register_object_store("s3", Arc::new(s3_file_system));
 //!
-//! let input_uri = "data/alltypes_plain.snappy.parquet";
+//! ctx.register_object_store("s3", s3_file_system.clone());
 //!
-//! let (object_store, _) = ctx.object_store("s3")?;
+//! let (object_store, name) = ctx.object_store("s3")?;
+//!
+//! let filename = "data/alltypes_plain.snappy.parquet";
 //!
 //! let listing_options = ListingOptions {
 //!     format: Arc::new(ParquetFormat::default()),
@@ -200,15 +207,20 @@
 //! };
 //!
 //! let resolved_schema = listing_options
-//!     .infer_schema(object_store.clone(), input_uri)
+//!     .infer_schema(s3_file_system.clone(), filename)
 //!     .await?;
 //!
-//! let mut table_provider: Arc<dyn TableProvider + Send + Sync> = Arc::new(ListingTable::new(
-//!     object_store,
-//!     input_uri.to_string(),
+//! let table = ListingTable::new(
+//!     s3_file_system,
+//!     filename.to_owned(),
 //!     resolved_schema,
 //!     listing_options,
-//! ));
+//! );
+//!
+//! ctx.register_table("tbl", Arc::new(table))?;
+//!
+//! let df = ctx.sql("SELECT * FROM tbl").await?;
+//! df.show();
 //! # Ok(())
 //! # }
 //! ```
