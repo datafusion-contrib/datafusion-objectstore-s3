@@ -296,7 +296,7 @@ impl ObjectReader for AmazonS3FileReader {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::object_store::s3::*;
     use aws_types::credentials::Credentials;
     use datafusion::assert_batches_eq;
     use datafusion::datasource::file_format::parquet::ParquetFormat;
