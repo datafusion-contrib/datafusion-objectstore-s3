@@ -18,7 +18,7 @@ let s3_file_system = Arc::new(S3FileSystem::default().await);
 
 `S3FileSystem::default()` is a convenience wrapper for `S3FileSystem::new(None, None, None, None, None, None)`.
 
-Connect to implementor of S3 API (MinIO, in this case) use access key and secret.
+Connect to implementor of S3 API (MinIO, in this case) using access key and secret.
 
 ```rust
 // Example credentials provided by MinIO
@@ -34,12 +34,12 @@ let s3_file_system = S3FileSystem::new(
         None,
         None,
         PROVIDER_NAME,
-    ))),
-    None,
-    Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-    None,
-    None,
-    None,
+    ))), // Credentials provider
+    None, // Region
+    Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))), // Endpoint
+    None, // RetryConfig
+    None, // AsyncSleep
+    None, // TimeoutConfig
 )
 .await;
 ```

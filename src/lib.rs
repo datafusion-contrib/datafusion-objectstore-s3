@@ -39,10 +39,11 @@
 //!
 //! `S3FileSystem::default()` is a convenience wrapper for `S3FileSystem::new(None, None, None, None, None, None)`.
 //!
-//! Connect to implementor of S3 API (MinIO, in this case) use access key and secret.
+//! Connect to implementor of S3 API (MinIO, in this case) using access key and secret.
 //!
 //! ```rust
 //! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
+//!
 //! use aws_types::credentials::SharedCredentialsProvider;
 //! use aws_types::credentials::Credentials;
 //! use aws_sdk_s3::Endpoint;
@@ -63,12 +64,12 @@
 //!         None,
 //!         None,
 //!         PROVIDER_NAME,
-//!     ))),
-//!     None,
-//!     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-//!     None,
-//!     None,
-//!     None,
+//!     ))), // SharedCredentialsProvider
+//!     None, //Region
+//!     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))), //Endpoint
+//!     None, // RetryConfig
+//!     None, // AsyncSleep
+//!     None, // TimeoutConfig
 //! )
 //! .await;
 //! # }
@@ -168,10 +169,8 @@
 //! # const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 //! # const PROVIDER_NAME: &str = "Static";
 //! # const MINIO_ENDPOINT: &str = "http://localhost:9000";
-//!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//!
 //! # let s3_file_system = Arc::new(S3FileSystem::new(
 //! #     Some(SharedCredentialsProvider::new(Credentials::new(
 //! #         MINIO_ACCESS_KEY_ID,
@@ -187,7 +186,6 @@
 //! #     None,
 //! # )
 //! # .await);
-//!
 //! let mut ctx = ExecutionContext::new();
 //!
 //! ctx.register_object_store("s3", s3_file_system.clone());
