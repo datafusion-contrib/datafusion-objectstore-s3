@@ -169,6 +169,7 @@
 //! # const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 //! # const PROVIDER_NAME: &str = "Static";
 //! # const MINIO_ENDPOINT: &str = "http://localhost:9000";
+//!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
 //! # let s3_file_system = Arc::new(S3FileSystem::new(
@@ -188,11 +189,12 @@
 //! # .await);
 //! let mut ctx = ExecutionContext::new();
 //!
+//! let uri = "s3://data/alltypes_plain.snappy.parquet";
+//! let (_, filename) = uri.split_once("://").unwrap();
+//!
 //! ctx.register_object_store("s3", s3_file_system.clone());
 //!
-//! let (object_store, name) = ctx.object_store("s3")?;
-//!
-//! let filename = "data/alltypes_plain.snappy.parquet";
+//! let (object_store, name) = ctx.object_store(uri)?;
 //!
 //! let listing_options = ListingOptions {
 //!     format: Arc::new(ParquetFormat::default()),
@@ -203,11 +205,11 @@
 //! };
 //!
 //! let resolved_schema = listing_options
-//!     .infer_schema(s3_file_system.clone(), filename)
+//!     .infer_schema(object_store.clone(), filename)
 //!     .await?;
 //!
 //! let table = ListingTable::new(
-//!     s3_file_system,
+//!     object_store,
 //!     filename.to_owned(),
 //!     resolved_schema,
 //!     listing_options,
