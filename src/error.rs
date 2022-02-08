@@ -1,3 +1,5 @@
+//! Custom error type for `DataFusion-ObjectStore-S3`
+
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 

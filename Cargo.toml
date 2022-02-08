@@ -1,9 +1,20 @@
 [package]
 edition = "2021"
 name = "datafusion-objectstore-s3"
+description = "S3 as an ObjectStore for Datafusion"
 version = "0.1.0"
+homepage = "https://github.com/datafusion-contrib/datafusion-objectstore-s3"
+repository = "https://github.com/datafusion-contrib/datafusion-objectstore-s3"
+readme = "../README.md"
+authors = ["Matthew Turner <matthew.m.turner@outlook.com>", "Michael Seddon <>"]
+license = "Apache-2.0"
+keywords = [ "arrow", "query", "sql", "datafusion" ]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "datafusion_objectstore_s3"
+path = "src/lib.rs"
 
 [dependencies]
 arrow = {version = "8.0.0", features = ["prettyprint"]}
