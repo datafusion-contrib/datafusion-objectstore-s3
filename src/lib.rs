@@ -21,8 +21,6 @@
 //! provides a `TableProvider` interface for using `Datafusion` to query data in S3.  This includes AWS S3
 //! and services such as MinIO that implement the S3 API.
 //!
-//! The initial implementation was donated by [Mike Seddon](https://github.com/seddonm1).
-//!
 //! ## Examples
 //! Examples for querying AWS and other implementors, such as MinIO, are shown below.
 //!
