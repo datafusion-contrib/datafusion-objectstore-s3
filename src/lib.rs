@@ -203,11 +203,11 @@
 //! };
 //!
 //! let resolved_schema = listing_options
-//!     .infer_schema(s3_file_system.clone(), filename)
+//!     .infer_schema(object_store.clone(), filename)
 //!     .await?;
 //!
 //! let table = ListingTable::new(
-//!     s3_file_system,
+//!     object_store,
 //!     filename.to_owned(),
 //!     resolved_schema,
 //!     listing_options,
