@@ -24,6 +24,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::{stream, AsyncRead};
 
+use datafusion::catalog::schema::SchemaProvider;
 use datafusion::datasource::object_store::SizedFile;
 use datafusion::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
