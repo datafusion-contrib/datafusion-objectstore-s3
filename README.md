@@ -44,29 +44,14 @@ let s3_file_system = S3FileSystem::new(
 .await;
 ```
 
-Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
+Using DataFusion's `ListingOtions` and `ListingTableConfig` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
 
 ```rust
 let filename = "data/alltypes_plain.snappy.parquet";
 
-let listing_options = ListingOptions {
-    format: Arc::new(ParquetFormat::default()),
-    collect_stat: true,
-    file_extension: "parquet".to_owned(),
-    target_partitions: num_cpus::get(),
-    table_partition_cols: vec![],
-};
+let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
 
-let resolved_schema = listing_options
-    .infer_schema(s3_file_system.clone(), filename)
-    .await?;
-
-let table = ListingTable::new(
-    s3_file_system,
-    filename.to_owned(),
-    resolved_schema,
-    listing_options,
-);
+let table = ListingTable::try_new(config)?;
 
 let mut ctx = ExecutionContext::new();
 
@@ -88,25 +73,9 @@ let input_uri = "s3://parquet-testing/data/alltypes_plain.snappy.parquet";
 
 let (object_store, _) = ctx.object_store(input_uri)?;
 
-let listing_options = ListingOptions {
-    format: Arc::new(ParquetFormat::default()),
-    collect_stat: true,
-    file_extension: "parquet".to_owned(),
-    target_partitions: num_cpus::get(),
-    table_partition_cols: vec![],
-};
+let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
 
-let resolved_schema = listing_options
-    .infer_schema(object_store.clone(), input_uri)
-    .await
-    .map_err(BoxError::from)?;
-
-let mut table_provider: Arc<dyn TableProvider + Send + Sync> = Arc::new(ListingTable::new(
-    object_store,
-    input_uri.to_string(),
-    resolved_schema,
-    listing_options,
-));
+let mut table_provider: Arc<dyn TableProvider + Send + Sync> = Arc::new(ListingTable::try_new(config)?);
 ```
 
 ## Testing
