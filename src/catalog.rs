@@ -31,6 +31,7 @@ impl S3Catalog {
     }
 
     /// Create a `SchemaProvider` from a directory uri
+    // TODO: Look into partitioned files
     fn uri_to_schema(uri: impl Into<String>, name: &str) -> Arc<dyn SchemaProvider> {
         let files = self.object_store.list_file(dir);
         files.iter.map(|file| {

@@ -30,4 +30,5 @@ datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "7b8d72
 futures = "0.3.19"
 http = "0.2.6"
 num_cpus = "1.13.1"
+parking_lot = "0.12"
 tokio = {version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"]}
