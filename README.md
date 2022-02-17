@@ -44,7 +44,7 @@ let s3_file_system = S3FileSystem::new(
 .await;
 ```
 
-Using DataFusion's `ListingOtions` and `ListingTableConfig` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
+Using DataFusion's `ListingTableConfig` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
 
 ```rust
 let filename = "data/alltypes_plain.snappy.parquet";
