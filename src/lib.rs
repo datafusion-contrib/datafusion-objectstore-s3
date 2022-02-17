@@ -102,14 +102,6 @@
 //! # async fn main() -> Result<()> {
 //! let filename = "data/alltypes_plain.snappy.parquet";
 //!
-//! let listing_options = ListingOptions {
-//!     format: Arc::new(ParquetFormat::default()),
-//!     collect_stat: true,
-//!     file_extension: "parquet".to_owned(),
-//!     target_partitions: num_cpus::get(),
-//!     table_partition_cols: vec![],
-//! };
-//!
 //! # let s3_file_system = Arc::new(S3FileSystem::new(
 //! #     Some(SharedCredentialsProvider::new(Credentials::new(
 //! #         MINIO_ACCESS_KEY_ID,
@@ -126,16 +118,9 @@
 //! # )
 //! # .await);
 //!
-//! let resolved_schema = listing_options
-//!     .infer_schema(s3_file_system.clone(), filename)
-//!     .await?;
+//! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
 //!
-//! let table = ListingTable::new(
-//!     s3_file_system,
-//!     filename.to_owned(),
-//!     resolved_schema,
-//!     listing_options,
-//! );
+//! let table = ListingTable::try_new(config)?;
 //!
 //! let mut ctx = ExecutionContext::new();
 //!
@@ -196,24 +181,9 @@
 //!
 //! let (object_store, name) = ctx.object_store(uri)?;
 //!
-//! let listing_options = ListingOptions {
-//!     format: Arc::new(ParquetFormat::default()),
-//!     collect_stat: true,
-//!     file_extension: "parquet".to_owned(),
-//!     target_partitions: num_cpus::get(),
-//!     table_partition_cols: vec![],
-//! };
+//! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
 //!
-//! let resolved_schema = listing_options
-//!     .infer_schema(object_store.clone(), filename)
-//!     .await?;
-//!
-//! let table = ListingTable::new(
-//!     object_store,
-//!     filename.to_owned(),
-//!     resolved_schema,
-//!     listing_options,
-//! );
+//! let table = ListingTable::try_new(config)?;
 //!
 //! ctx.register_table("tbl", Arc::new(table))?;
 //!

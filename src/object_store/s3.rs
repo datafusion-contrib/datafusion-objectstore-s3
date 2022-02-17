@@ -299,7 +299,6 @@ mod tests {
     use crate::object_store::s3::*;
     use aws_types::credentials::Credentials;
     use datafusion::assert_batches_eq;
-    use datafusion::datasource::file_format::parquet::ParquetFormat;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
     use datafusion::prelude::ExecutionContext;
@@ -421,24 +420,11 @@ mod tests {
 
         let filename = "data/alltypes_plain.snappy.parquet";
 
-        let listing_options = ListingOptions {
-            format: Arc::new(ParquetFormat::default()),
-            collect_stat: true,
-            file_extension: "parquet".to_owned(),
-            target_partitions: num_cpus::get(),
-            table_partition_cols: vec![],
-        };
-
-        let resolved_schema = listing_options
-            .infer_schema(s3_file_system.clone(), filename)
+        let config = ListingTableConfig::new(s3_file_system, filename)
+            .infer()
             .await?;
 
-        let table = ListingTable::new(
-            s3_file_system,
-            filename.to_owned(),
-            resolved_schema,
-            listing_options,
-        );
+        let table = ListingTable::try_new(config)?;
 
         let exec = table.scan(&None, &[], Some(1024)).await?;
         assert_eq!(exec.statistics().num_rows, Some(2));
@@ -469,24 +455,11 @@ mod tests {
 
         let filename = "data/alltypes_plain.snappy.parquet";
 
-        let listing_options = ListingOptions {
-            format: Arc::new(ParquetFormat::default()),
-            collect_stat: true,
-            file_extension: "parquet".to_owned(),
-            target_partitions: num_cpus::get(),
-            table_partition_cols: vec![],
-        };
-
-        let resolved_schema = listing_options
-            .infer_schema(s3_file_system.clone(), filename)
+        let config = ListingTableConfig::new(s3_file_system, filename)
+            .infer()
             .await?;
 
-        let table = ListingTable::new(
-            s3_file_system,
-            filename.to_owned(),
-            resolved_schema,
-            listing_options,
-        );
+        let table = ListingTable::try_new(config)?;
 
         let mut ctx = ExecutionContext::new();
 
@@ -529,25 +502,12 @@ mod tests {
 
         let filename = "bad_data/PARQUET-1481.parquet";
 
-        let listing_options = ListingOptions {
-            format: Arc::new(ParquetFormat::default()),
-            collect_stat: true,
-            file_extension: "parquet".to_owned(),
-            target_partitions: num_cpus::get(),
-            table_partition_cols: vec![],
-        };
-
-        let resolved_schema = listing_options
-            .infer_schema(s3_file_system.clone(), filename)
+        let config = ListingTableConfig::new(s3_file_system, filename)
+            .infer()
             .await
             .unwrap();
 
-        let table = ListingTable::new(
-            s3_file_system,
-            filename.to_owned(),
-            resolved_schema,
-            listing_options,
-        );
+        let table = ListingTable::try_new(config).unwrap();
 
         table.scan(&None, &[], Some(1024)).await.unwrap();
     }
