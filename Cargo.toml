@@ -5,8 +5,8 @@ description = "S3 as an ObjectStore for Datafusion"
 version = "0.1.0"
 homepage = "https://github.com/datafusion-contrib/datafusion-objectstore-s3"
 repository = "https://github.com/datafusion-contrib/datafusion-objectstore-s3"
-readme = "../README.md"
-authors = ["Matthew Turner <matthew.m.turner@outlook.com>", "Michael Seddon <>"]
+readme = "README.md"
+authors = ["Matthew Turner <matthew.m.turner@outlook.com>", "Michael Seddon <seddonm1@gmail.com>"]
 license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql", "datafusion" ]
 
