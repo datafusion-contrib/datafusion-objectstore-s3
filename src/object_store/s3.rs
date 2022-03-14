@@ -605,4 +605,56 @@ mod tests {
 
         assert!(files.next().await.is_none())
     }
+
+    // Test that a SQL query can be executed on a partitioned Parquet file that was read from `S3FileSystem`
+    #[tokio::test]
+    async fn test_sql_query_on_partitioned_parquet() -> Result<()> {
+        let s3_file_system = Arc::new(
+            S3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let filename = "data/partitioned/alltypes_plain";
+
+        let config = ListingTableConfig::new(s3_file_system, filename)
+            .infer()
+            .await?;
+
+        let table = ListingTable::try_new(config)?;
+
+        let mut ctx = ExecutionContext::new();
+
+        ctx.register_table("tbl", Arc::new(table)).unwrap();
+
+        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
+        let expected = vec![
+            "+----+----------+-------------+---------+------------+-----------+------------+------------------+------------+-------------------------+",
+            "| id | bool_col | tinyint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col           |",
+            "+----+----------+-------------+---------+------------+-----------+------------+------------------+------------+-------------------------+",
+            "| 4  | true     | 0           | 0       | 0          | 0         | 0          | 30332f30312f3039 | 30         | 1970-01-15 07:17:45.600 |",
+            "| 6  | true     | 0           | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 1970-01-15 08:02:24     |",
+            "| 2  | true     | 0           | 0       | 0          | 0         | 0          | 30322f30312f3039 | 30         | 1970-01-15 06:37:26.400 |",
+            "| 0  | true     | 0           | 0       | 0          | 0         | 0          | 30312f30312f3039 | 30         | 1970-01-15 05:52:48     |",
+            "| 5  | false    | 1           | 1       | 10         | 1.1       | 10.1       | 30332f30312f3039 | 31         | 1970-01-15 07:17:45.660 |",
+            "| 7  | false    | 1           | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 1970-01-15 08:02:24.060 |",
+            "| 3  | false    | 1           | 1       | 10         | 1.1       | 10.1       | 30322f30312f3039 | 31         | 1970-01-15 06:37:26.460 |",
+            "| 1  | false    | 1           | 1       | 10         | 1.1       | 10.1       | 30312f30312f3039 | 31         | 1970-01-15 05:52:48.060 |",
+            "+----+----------+-------------+---------+------------+-----------+------------+------------------+------------+-------------------------+",
+        ];
+        assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
 }

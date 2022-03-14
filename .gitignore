@@ -10,3 +10,7 @@ Cargo.lock
 **/*.rs.bk
 
 parquet-testing
+
+/.minio.sys
+
+.DS_Store
