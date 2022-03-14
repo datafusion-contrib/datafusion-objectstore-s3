@@ -606,7 +606,7 @@ mod tests {
         assert!(files.next().await.is_none())
     }
 
-    // Test that a SQL query can be executed on a partitioned Parquet file that was read from `S3FileSystem`
+    // Test that a SQL query can be executed on a partitioned Parquet dataset that was read from `S3FileSystem`
     #[tokio::test]
     async fn test_sql_query_on_partitioned_parquet() -> Result<()> {
         let s3_file_system = Arc::new(
