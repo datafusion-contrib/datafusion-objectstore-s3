@@ -121,7 +121,7 @@ impl S3FileSystem {
 #[async_trait]
 impl ObjectStore for S3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        let (bucket, prefix) = match prefix.split_once("/") {
+        let (bucket, prefix) = match prefix.split_once('/') {
             Some((bucket, prefix)) => (bucket.to_owned(), prefix),
             None => (prefix.to_owned(), ""),
         };
@@ -246,7 +246,7 @@ impl ObjectReader for AmazonS3FileReader {
                 )
                 .await;
 
-                let (bucket, key) = match file_path.split_once("/") {
+                let (bucket, key) = match file_path.split_once('/') {
                     Some((bucket, prefix)) => (bucket, prefix),
                     None => (file_path.as_str(), ""),
                 };
