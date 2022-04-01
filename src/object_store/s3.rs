@@ -33,7 +33,7 @@ use datafusion::error::{DataFusionError, Result};
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
 use aws_smithy_async::rt::sleep::AsyncSleep;
-use aws_smithy_types::timeout::TimeoutConfig;
+use aws_smithy_types::timeout::Config;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
@@ -50,7 +50,7 @@ async fn new_client(
     endpoint: Option<Endpoint>,
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
-    timeout_config: Option<TimeoutConfig>,
+    timeout_config: Option<Config>,
 ) -> Client {
     let config = aws_config::load_from_env().await;
 
@@ -92,7 +92,7 @@ pub struct S3FileSystem {
     endpoint: Option<Endpoint>,
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
-    timeout_config: Option<TimeoutConfig>,
+    timeout_config: Option<Config>,
     client: Client,
 }
 
@@ -104,7 +104,7 @@ impl S3FileSystem {
         endpoint: Option<Endpoint>,
         retry_config: Option<RetryConfig>,
         sleep: Option<Arc<dyn AsyncSleep>>,
-        timeout_config: Option<TimeoutConfig>,
+        timeout_config: Option<Config>,
     ) -> Self {
         Self {
             credentials_provider: credentials_provider.clone(),
@@ -121,7 +121,7 @@ impl S3FileSystem {
 #[async_trait]
 impl ObjectStore for S3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        let (bucket, prefix) = match prefix.split_once("/") {
+        let (bucket, prefix) = match prefix.split_once('/') {
             Some((bucket, prefix)) => (bucket.to_owned(), prefix),
             None => (prefix.to_owned(), ""),
         };
@@ -184,7 +184,7 @@ struct AmazonS3FileReader {
     endpoint: Option<Endpoint>,
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
-    timeout_config: Option<TimeoutConfig>,
+    timeout_config: Option<Config>,
     file: SizedFile,
 }
 
@@ -196,7 +196,7 @@ impl AmazonS3FileReader {
         endpoint: Option<Endpoint>,
         retry_config: Option<RetryConfig>,
         sleep: Option<Arc<dyn AsyncSleep>>,
-        timeout_config: Option<TimeoutConfig>,
+        timeout_config: Option<Config>,
         file: SizedFile,
     ) -> Result<Self> {
         Ok(Self {
@@ -246,7 +246,7 @@ impl ObjectReader for AmazonS3FileReader {
                 )
                 .await;
 
-                let (bucket, key) = match file_path.split_once("/") {
+                let (bucket, key) = match file_path.split_once('/') {
                     Some((bucket, prefix)) => (bucket, prefix),
                     None => (file_path.as_str(), ""),
                 };
