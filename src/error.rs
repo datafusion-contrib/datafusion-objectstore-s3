@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter};
 /// PartialEq is to enable testing for specific error types
 #[derive(Debug, PartialEq)]
 pub enum S3Error {
-    /// Returned when functionaly is not yet available.
+    /// Returned when functionally is not yet available.
     NotImplemented(String),
     /// Wrapper for AWS errors
     AWS(String),
