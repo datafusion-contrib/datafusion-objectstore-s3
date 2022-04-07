@@ -67,6 +67,12 @@ impl S3FileSystem {
 #[async_trait]
 impl ObjectStore for S3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+        let prefix = if let Some((_scheme, path)) = prefix.split_once("://") {
+            path
+        } else {
+            prefix
+        };
+
         println!("list_file: {prefix}");
         // let (bucket, prefix) = match prefix.split_once('/') {
         //     Some((bucket, prefix)) => (bucket.to_owned(), prefix),
@@ -174,7 +180,7 @@ mod tests {
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
     use datafusion::error::Result;
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{ParquetReadOptions, SessionContext};
     use futures::StreamExt;
 
     const ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
@@ -329,8 +335,26 @@ mod tests {
         let (_, name) = runtime_env.object_store("s3").unwrap();
         assert_eq!(name, "s3");
 
-        // TODO: zrobić test pobrania danych z tabeli bo błąd w datafusion jest
+        ctx.register_parquet(
+            "mytable",
+            "s3://list_columns.parquet",
+            ParquetReadOptions::default(),
+        )
+        .await?;
 
+        let batches = ctx
+            .sql("SELECT count(*) AS count FROM mytable")
+            .await?
+            .collect()
+            .await?;
+        let expected = vec![
+            "+-------+",
+            "| count |",
+            "+-------+",
+            "| 3     |",
+            "+-------+",
+        ];
+        assert_batches_eq!(expected, &batches);
         Ok(())
     }
 
