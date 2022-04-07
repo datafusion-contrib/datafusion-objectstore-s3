@@ -26,7 +26,7 @@
 //!
 //! Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
 //!
-//! ```rust
+//! ```ignore
 //! # use std::sync::Arc;
 //! # use datafusion::error::Result;
 //! # use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
@@ -41,7 +41,7 @@
 //!
 //! Connect to implementor of S3 API (MinIO, in this case) using access key and secret.
 //!
-//! ```rust
+//! ```ignore
 //! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
 //!
 //! use aws_types::credentials::SharedCredentialsProvider;
@@ -77,7 +77,7 @@
 //!
 //! Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
 //!
-//! ```rust
+//! ```ignore
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
@@ -134,7 +134,7 @@
 //!
 //! We can also register the `S3FileSystem` directly as an `ObjectStore` on an `ExecutionContext`. This provides an idiomatic way of creating `TableProviders` that can be queried.
 //!
-//! ```rust
+//! ```ignore
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
@@ -194,5 +194,4 @@
 //! ```
 //!
 
-pub mod error;
 pub mod object_store;

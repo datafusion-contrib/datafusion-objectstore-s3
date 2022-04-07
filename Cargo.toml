@@ -16,21 +16,20 @@ keywords = [ "arrow", "query", "sql", "datafusion" ]
 name = "datafusion_objectstore_s3"
 path = "src/lib.rs"
 
-[dev-dependencies]
-env_logger = "0.9.0"
+# https://doc.rust-lang.org/cargo/reference/profiles.html#overrides
+[profile.dev.package."*"]
+opt-level = 2
 
 [dependencies]
-arrow = { version = "11.1.0", features = ["prettyprint"] }
+datafusion-data-access = { git = "https://github.com/apache/arrow-datafusion.git", branch = "master" }
 async-trait = "0.1.53"
-aws-config = "0.9.0"
-aws-sdk-s3 = "0.9.0"
-aws-smithy-async = "0.39.0"
-aws-smithy-types = "0.39.0"
-aws-smithy-types-convert = { version = "0.39.0", features = ["convert-chrono"] }
-aws-types = "0.9.0"
-bytes = "1.1.0"
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", branch = "master" }
 futures = "0.3.21"
-http = "0.2.6"
-num_cpus = "1.13.1"
+tokio = { version = "1.17.0", features = ["rt"] }
+rust-s3 = "0.30.0"
+chrono = { version = "0.4", default-features = false }
+
+[dev-dependencies]
+env_logger = "0.9.0"
+arrow = { version = "11.1.0", features = ["prettyprint"] }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", branch = "master" }
 tokio = { version = "1.17.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"] }
