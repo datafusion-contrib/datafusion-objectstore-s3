@@ -73,12 +73,6 @@ impl ObjectStore for S3FileSystem {
             prefix
         };
 
-        println!("list_file: {prefix}");
-        // let (bucket, prefix) = match prefix.split_once('/') {
-        //     Some((bucket, prefix)) => (bucket.to_owned(), prefix),
-        //     None => (prefix.to_owned(), ""),
-        // };
-
         let objects = self
             .bucket
             .list(prefix.to_string(), None)
@@ -150,18 +144,12 @@ impl ObjectReader for S3CompatibleFileReader {
                     .await
                     .map_err(|e| io::Error::new(ErrorKind::Other, e));
                 // TODO: sprawdzić status code
-                if let Ok((data, status_code)) = &resp {
-                    println!(
-                        "file: {file_path}, start={start} end={end:?}, resp_len={}, status_code={status_code}",
-                        data.len()
-                    );
-                }
 
                 tx.send(resp).unwrap();
             })
         });
 
-        let (bytes, _) = rx
+        let (bytes, _status_code) = rx
             .recv_timeout(Duration::from_secs(10))
             .map_err(|e| io::Error::new(ErrorKind::Other, e))??;
 
