@@ -19,24 +19,33 @@
 
 use std::io;
 use std::io::{Cursor, ErrorKind, Read};
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 use async_trait::async_trait;
 use futures::{stream, AsyncRead};
 
 use datafusion_data_access::{FileMeta, Result, SizedFile};
 
+use crate::object_store::stream::{RangedStreamer, SeekOutput};
+use crate::object_store::worker::{BucketWorker, GetObjectRange};
 use datafusion_data_access::object_store::{
     FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
+use futures::future::BoxFuture;
+use s3::command::Command;
 use s3::creds::Credentials;
 use s3::{Bucket, Region};
+use tokio::runtime::Runtime;
 
 /// `ObjectStore` implementation for the Amazon S3 API
 #[derive(Debug)]
 pub struct S3FileSystem {
     bucket: Arc<Bucket>,
+    worker_tx: Arc<mpsc::Sender<GetObjectRange>>,
+    counter: AtomicUsize,
 }
 
 impl S3FileSystem {
@@ -58,8 +67,27 @@ impl S3FileSystem {
 
         let mut bucket = Bucket::new(bucket_name, region, credentials).unwrap();
         bucket.set_path_style();
+        let bucket = Arc::new(bucket);
+
+        let (tx, rx) = mpsc::channel(100);
+        let worker = BucketWorker::new(bucket.clone(), rx);
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            rt.block_on(async move {
+                let mut worker = worker;
+                worker.wait_for_io().await
+            });
+        });
+
         Ok(Self {
-            bucket: Arc::new(bucket),
+            bucket,
+            worker_tx: Arc::new(tx),
+            counter: Default::default(),
         })
     }
 }
@@ -81,6 +109,50 @@ impl ObjectStore for S3FileSystem {
             .into_iter()
             .flat_map(|list| list.contents);
 
+        /*
+                for o in objects.clone() {
+                    println!("loading metadata for: {o:?}");
+                    let length = o.size as usize;
+
+                    let bucket = self.bucket.clone();
+                    let path = Arc::new(o.key.clone());
+                    let range_get = Arc::new(move |start: u64, length: usize| {
+                        let bucket = bucket.clone();
+                        let path = path.clone();
+                        Box::pin(async move {
+                            let path = path.clone();
+                            println!(
+                                "requested: {} kb, start={start}, length={length}",
+                                length / 1024
+                            );
+                            let (mut data, _) = bucket
+                                .get_object_range(path.as_str(), start, Some(start + length as u64))
+                                .await
+                                .map_err(|x| {
+                                    std::io::Error::new(std::io::ErrorKind::Other, x.to_string())
+                                })?;
+
+                            println!("received: {} b", data.len());
+                            data.truncate(length);
+                            Ok(SeekOutput { start, data })
+                        }) as BoxFuture<'static, std::io::Result<SeekOutput>>
+                    });
+
+                    let mut reader = RangedStreamer::new(length, 1024 * 1024, range_get);
+
+                    let metadata = parquet2::read::read_metadata_async(&mut reader)
+                        .await
+                        .unwrap();
+
+                    // metadata
+                    println!(
+                        "number of rows: {} row_groups: {}",
+                        metadata.num_rows,
+                        metadata.row_groups.len()
+                    );
+                }
+        */
+
         let result = stream::iter(objects.map(move |object| {
             Ok(FileMeta {
                 sized_file: SizedFile {
@@ -101,16 +173,21 @@ impl ObjectStore for S3FileSystem {
     }
 
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
+        let id = self.counter.fetch_add(1, Ordering::Acquire);
         Ok(Arc::new(S3CompatibleFileReader {
+            id,
             bucket: self.bucket.clone(),
             file,
+            worker_tx: self.worker_tx.clone(),
         }))
     }
 }
 
 struct S3CompatibleFileReader {
+    id: usize,
     bucket: Arc<Bucket>,
     file: SizedFile,
+    worker_tx: Arc<mpsc::Sender<GetObjectRange>>,
 }
 
 #[async_trait]
@@ -120,38 +197,25 @@ impl ObjectReader for S3CompatibleFileReader {
     }
 
     fn sync_chunk_reader(&self, start: u64, length: usize) -> Result<Box<dyn Read + Send + Sync>> {
-        let file_path = self.file.path.clone();
-        let bucket = self.bucket.clone();
+        // TODO: get from cache
 
-        // once the async chunk file readers have been implemented this complexity can be removed
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let req = GetObjectRange {
+            id: self.id,
+            path: self.file.path.clone(),
+            start,
+            length,
+            tx,
+        };
 
-            rt.block_on(async move {
-                let end = if length > 0 {
-                    // TODO: co gdy start=0 i length = 1, będzie panic w get_object_range ???
-                    Some(start + length as u64 - 1)
-                } else {
-                    None
-                };
-
-                let resp = bucket
-                    .get_object_range(&file_path, start, end)
-                    .await
-                    .map_err(|e| io::Error::new(ErrorKind::Other, e));
-                // TODO: sprawdzić status code
-
-                tx.send(resp).unwrap();
-            })
-        });
+        self.worker_tx.try_send(req).unwrap();
 
         let (bytes, _status_code) = rx
             .recv_timeout(Duration::from_secs(10))
             .map_err(|e| io::Error::new(ErrorKind::Other, e))??;
+        // println!("file: {} get {} bytes", self.file.path, bytes.len());
+
+        // save to cache
 
         Ok(Box::new(Cursor::new(bytes)))
     }
@@ -248,9 +312,9 @@ mod tests {
     // Test that reading Parquet file with `S3FileSystem` can create a `ListingTable`
     #[tokio::test]
     async fn test_read_parquet() -> Result<()> {
-        let s3_file_system = Arc::new(create_bucket("data"));
+        let s3_file_system = Arc::new(create_bucket("sreport"));
 
-        let filename = "alltypes_plain.snappy.parquet";
+        let filename = "stops.parquet";
 
         let config = ListingTableConfig::new(s3_file_system, filename)
             .infer()
