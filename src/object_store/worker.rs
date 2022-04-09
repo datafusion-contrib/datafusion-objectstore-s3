@@ -1,4 +1,7 @@
 use datafusion_data_access::Result;
+use s3::command::Command;
+use s3::request::Reqwest;
+use s3::request_trait::Request;
 use s3::Bucket;
 use std::io;
 use std::io::ErrorKind;
@@ -17,23 +20,9 @@ impl BucketWorker {
 
     pub async fn wait_for_io(&mut self) {
         while let Some(req) = self.rx.recv().await {
-            let end = if req.length > 0 {
-                // TODO: co gdy start=0 i length = 1, będzie panic w get_object_range ???
-                Some(req.start + req.length as u64 - 1)
-            } else {
-                None
-            };
-
             let bucket = self.bucket.clone();
             tokio::spawn(async move {
-                println!(
-                    "id: {} file: {} start: {} len: {}",
-                    req.id, req.path, req.start, req.length
-                );
-                let result = bucket
-                    .get_object_range(&req.path, req.start, end)
-                    .await
-                    .map_err(|e| io::Error::new(ErrorKind::Other, e));
+                let result = bucket_read(&bucket, &req.path, req.start, req.length).await;
 
                 req.tx
                     .send(result)
@@ -44,11 +33,46 @@ impl BucketWorker {
     }
 }
 
+pub async fn bucket_read(
+    bucket: &Bucket,
+    path: &str,
+    start: u64,
+    length: usize,
+) -> Result<Vec<u8>> {
+    let end = if length > 0 {
+        Some(start + length as u64 - 1)
+    } else {
+        None
+    };
+
+    let command = Command::GetObjectRange { start, end };
+    let request = Reqwest::new(bucket, path, command);
+    let res = request
+        .response()
+        .await
+        .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        return Err(io::Error::new(
+            ErrorKind::Other,
+            format!("got status code '{status}'"),
+        ));
+    }
+
+    let bytes = res
+        .bytes()
+        .await
+        .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
+
+    Ok(bytes.to_vec())
+}
+
 #[derive(Debug)]
 pub struct GetObjectRange {
     pub id: usize,
     pub path: String,
     pub start: u64,
     pub length: usize,
-    pub tx: std::sync::mpsc::Sender<Result<(Vec<u8>, u16)>>,
+    pub tx: std::sync::mpsc::Sender<Result<Vec<u8>>>,
 }

@@ -17,6 +17,7 @@
 
 //! ObjectStore implementation for the Amazon S3 API
 
+use std::collections::HashMap;
 use std::io;
 use std::io::{Cursor, ErrorKind, Read};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,17 +29,87 @@ use async_trait::async_trait;
 use futures::{stream, AsyncRead};
 
 use datafusion_data_access::{FileMeta, Result, SizedFile};
+use futures::stream::StreamExt;
 
-use crate::object_store::stream::{RangedStreamer, SeekOutput};
+use crate::object_store::cache::Cache;
+use crate::object_store::parquet::load_parquet_metadata;
 use crate::object_store::worker::{BucketWorker, GetObjectRange};
 use datafusion_data_access::object_store::{
     FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
-use futures::future::BoxFuture;
-use s3::command::Command;
+use parking_lot::Mutex;
 use s3::creds::Credentials;
 use s3::{Bucket, Region};
-use tokio::runtime::Runtime;
+
+#[derive(Debug)]
+struct S3File {
+    f: FileMeta,
+    metadata: Option<(u64, Vec<u8>)>,
+}
+
+#[derive(Debug, Default)]
+struct S3Data {
+    files: HashMap<String, S3File>,
+}
+
+/// Options for `S3FileSystem`
+#[derive(Debug)]
+pub struct S3FileSystemOptions {
+    /// Minimal bytes request size to S3 server, extra data is used as cache
+    min_request_size: usize,
+    /// How jobs to use during parquet metadata pre-fetch step (during listing files)
+    concurrent_jobs: usize,
+}
+
+impl Default for S3FileSystemOptions {
+    fn default() -> Self {
+        S3FileSystemOptions {
+            min_request_size: 64 * 1024,
+            concurrent_jobs: num_cpus::get(),
+        }
+    }
+}
+
+impl S3FileSystemOptions {
+    /// Get options from envs DATAFUSION_S3_MIN_REQUEST_SIZE and DATAFUSION_S3_CONCURRENT_JOBS
+    /// if evn missing, return defaults
+    pub fn from_envs() -> Result<Self> {
+        let min_request_size: usize = std::env::var("DATAFUSION_S3_MIN_REQUEST_SIZE")
+            .ok()
+            .map(|s| s.parse())
+            .transpose()
+            .map_err(|e| {
+                io::Error::new(
+                    ErrorKind::Other,
+                    format!(
+                        "cannot parse env DATAFUSION_S3_MIN_REQUEST_SIZE error: {}",
+                        e
+                    ),
+                )
+            })?
+            .unwrap_or(64 * 1024);
+
+        let concurrent_jobs: usize = std::env::var("DATAFUSION_S3_CONCURRENT_JOBS")
+            .ok()
+            .map(|s| s.parse())
+            .transpose()
+            .map_err(|e| {
+                io::Error::new(
+                    ErrorKind::Other,
+                    format!(
+                        "cannot parse env DATAFUSION_S3_CONCURRENT_JOBS error: {}",
+                        e
+                    ),
+                )
+            })?
+            .unwrap_or_else(num_cpus::get);
+
+        Ok(Self {
+            min_request_size,
+            concurrent_jobs,
+        })
+    }
+}
 
 /// `ObjectStore` implementation for the Amazon S3 API
 #[derive(Debug)]
@@ -46,6 +117,8 @@ pub struct S3FileSystem {
     bucket: Arc<Bucket>,
     worker_tx: Arc<mpsc::Sender<GetObjectRange>>,
     counter: AtomicUsize,
+    options: S3FileSystemOptions,
+    data: Mutex<S3Data>,
 }
 
 impl S3FileSystem {
@@ -55,8 +128,9 @@ impl S3FileSystem {
         endpoint: &str,
         access_key: Option<&str>,
         secret_key: Option<&str>,
+        options: S3FileSystemOptions,
     ) -> Result<Self> {
-        // TODO: retry configuration
+        assert!(options.concurrent_jobs >= 1);
 
         let region = Region::Custom {
             region: "".to_string(),
@@ -72,8 +146,10 @@ impl S3FileSystem {
         let (tx, rx) = mpsc::channel(100);
         let worker = BucketWorker::new(bucket.clone(), rx);
 
+        let jobs_num = options.concurrent_jobs;
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(jobs_num)
                 .enable_all()
                 .build()
                 .unwrap();
@@ -88,6 +164,8 @@ impl S3FileSystem {
             bucket,
             worker_tx: Arc::new(tx),
             counter: Default::default(),
+            options,
+            data: Default::default(),
         })
     }
 }
@@ -107,64 +185,82 @@ impl ObjectStore for S3FileSystem {
             .await
             .map_err(|e| io::Error::new(ErrorKind::Other, e))?
             .into_iter()
-            .flat_map(|list| list.contents);
-
-        /*
-                for o in objects.clone() {
-                    println!("loading metadata for: {o:?}");
-                    let length = o.size as usize;
-
-                    let bucket = self.bucket.clone();
-                    let path = Arc::new(o.key.clone());
-                    let range_get = Arc::new(move |start: u64, length: usize| {
-                        let bucket = bucket.clone();
-                        let path = path.clone();
-                        Box::pin(async move {
-                            let path = path.clone();
-                            println!(
-                                "requested: {} kb, start={start}, length={length}",
-                                length / 1024
-                            );
-                            let (mut data, _) = bucket
-                                .get_object_range(path.as_str(), start, Some(start + length as u64))
-                                .await
-                                .map_err(|x| {
-                                    std::io::Error::new(std::io::ErrorKind::Other, x.to_string())
-                                })?;
-
-                            println!("received: {} b", data.len());
-                            data.truncate(length);
-                            Ok(SeekOutput { start, data })
-                        }) as BoxFuture<'static, std::io::Result<SeekOutput>>
-                    });
-
-                    let mut reader = RangedStreamer::new(length, 1024 * 1024, range_get);
-
-                    let metadata = parquet2::read::read_metadata_async(&mut reader)
-                        .await
-                        .unwrap();
-
-                    // metadata
-                    println!(
-                        "number of rows: {} row_groups: {}",
-                        metadata.num_rows,
-                        metadata.row_groups.len()
-                    );
-                }
-        */
-
-        let result = stream::iter(objects.map(move |object| {
-            Ok(FileMeta {
-                sized_file: SizedFile {
-                    path: object.key,
-                    size: object.size,
-                },
-                last_modified: Some(
-                    object.last_modified.parse().expect("invalid datetime"), // .map_err(|e| io::Error::new(ErrorKind::Other, e))?,
-                ),
+            .flat_map(|list| list.contents)
+            .map(|object| {
+                Ok(FileMeta {
+                    sized_file: SizedFile {
+                        path: object.key,
+                        size: object.size,
+                    },
+                    last_modified: Some(
+                        object
+                            .last_modified
+                            .parse()
+                            .map_err(|e| io::Error::new(ErrorKind::Other, e))?,
+                    ),
+                })
             })
-        }));
+            .collect::<Result<Vec<_>>>()?;
 
+        let futures = {
+            // check which files requires pre-fetch parquet metadata
+            let mut inner_data = self.data.lock();
+
+            let mut futures = vec![];
+            for o in &objects {
+                if let Some(c) = inner_data.files.get(o.path()) {
+                    if c.f.last_modified == o.last_modified {
+                        // file not modified, skipping
+                        continue;
+                    }
+                }
+
+                if !o.path().ends_with(".parquet") {
+                    // not parquet file
+                    inner_data.files.insert(
+                        o.path().to_string(),
+                        S3File {
+                            f: o.clone(),
+                            metadata: None,
+                        },
+                    );
+                    continue;
+                }
+
+                // create future to pre-fetch metadata cache for file
+                let bucket = self.bucket.clone();
+                let o = o.clone();
+                futures.push(async move {
+                    println!("loading metadata for: {o:?}");
+                    let r = load_parquet_metadata(&bucket, o.path(), o.size()).await;
+                    r.map(|(start, metadata)| (o, start, metadata))
+                });
+            }
+
+            futures
+        };
+
+        let stream = futures::stream::iter(futures).buffer_unordered(self.options.concurrent_jobs);
+        let results = stream.collect::<Vec<_>>().await;
+
+        {
+            let mut inner_data = self.data.lock();
+
+            for r in results {
+                let (o, start, bytes) = r?;
+
+                // println!("parquet {} metadata ({}, {})", o.path(), start, bytes.len(),);
+                inner_data.files.insert(
+                    o.path().to_string(),
+                    S3File {
+                        f: o,
+                        metadata: Some((start, bytes)),
+                    },
+                );
+            }
+        }
+
+        let result = stream::iter(objects.into_iter().map(Result::Ok));
         Ok(Box::pin(result))
     }
 
@@ -174,21 +270,39 @@ impl ObjectStore for S3FileSystem {
 
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         let id = self.counter.fetch_add(1, Ordering::Acquire);
+
+        let inner_data = self.data.lock();
+        let cached_file = inner_data.files.get(&file.path).ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::NotFound,
+                format!("file {} not found in S3 cache", file.path),
+            )
+        })?;
+
+        let cache = Cache::new();
+        if let Some(m) = &cached_file.metadata {
+            cache.put(m.0, m.1.clone());
+        }
+
         Ok(Arc::new(S3CompatibleFileReader {
             id,
-            bucket: self.bucket.clone(),
             file,
             worker_tx: self.worker_tx.clone(),
+            cache,
+            min_request_size: self.options.min_request_size,
         }))
     }
 }
 
 struct S3CompatibleFileReader {
     id: usize,
-    bucket: Arc<Bucket>,
     file: SizedFile,
     worker_tx: Arc<mpsc::Sender<GetObjectRange>>,
+    cache: Cache,
+    min_request_size: usize,
 }
+
+impl S3CompatibleFileReader {}
 
 #[async_trait]
 impl ObjectReader for S3CompatibleFileReader {
@@ -197,27 +311,53 @@ impl ObjectReader for S3CompatibleFileReader {
     }
 
     fn sync_chunk_reader(&self, start: u64, length: usize) -> Result<Box<dyn Read + Send + Sync>> {
-        // TODO: get from cache
+        if let Some(bytes) = self.cache.get(start, length) {
+            // println!(
+            //     "cached id: {} file: {} start: {} len: {}",
+            //     self.id, self.file.path, start, length
+            // );
+            return Ok(Box::new(Cursor::new(bytes)));
+        }
+
+        let req_length = std::cmp::max(length, self.min_request_size);
+        // println!(
+        //     "direct id: {} file: {} start: {} len: {}, rlen: {}",
+        //     self.id, self.file.path, start, length, req_length
+        // );
 
         let (tx, rx) = std::sync::mpsc::channel();
         let req = GetObjectRange {
             id: self.id,
             path: self.file.path.clone(),
             start,
-            length,
+            length: req_length,
             tx,
         };
 
         self.worker_tx.try_send(req).unwrap();
 
-        let (bytes, _status_code) = rx
+        let bytes = rx
             .recv_timeout(Duration::from_secs(10))
             .map_err(|e| io::Error::new(ErrorKind::Other, e))??;
         // println!("file: {} get {} bytes", self.file.path, bytes.len());
 
         // save to cache
+        let r = if bytes.len() <= self.min_request_size {
+            let r = bytes[..length].to_vec();
+            // println!(
+            //     "put id: {} file: {} start: {} len: {}",
+            //     self.id,
+            //     self.file.path,
+            //     start,
+            //     bytes.len()
+            // );
+            self.cache.put(start, bytes);
+            r
+        } else {
+            bytes
+        };
 
-        Ok(Box::new(Cursor::new(bytes)))
+        Ok(Box::new(Cursor::new(r)))
     }
 
     fn length(&self) -> u64 {
@@ -242,12 +382,14 @@ mod tests {
     fn create_bucket(name: &str) -> S3FileSystem {
         // std::env::set_var("RUST_LOG", "INFO");
         // env_logger::init();
+        let options = S3FileSystemOptions::default();
 
         S3FileSystem::new_custom(
             name,
             MINIO_ENDPOINT,
             Some(ACCESS_KEY_ID),
             Some(SECRET_ACCESS_KEY),
+            options,
         )
         .unwrap()
     }
@@ -312,9 +454,9 @@ mod tests {
     // Test that reading Parquet file with `S3FileSystem` can create a `ListingTable`
     #[tokio::test]
     async fn test_read_parquet() -> Result<()> {
-        let s3_file_system = Arc::new(create_bucket("sreport"));
+        let s3_file_system = Arc::new(create_bucket("data"));
 
-        let filename = "stops.parquet";
+        let filename = "alltypes_plain.snappy.parquet";
 
         let config = ListingTableConfig::new(s3_file_system, filename)
             .infer()
