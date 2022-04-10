@@ -16,18 +16,26 @@ keywords = [ "arrow", "query", "sql", "datafusion" ]
 name = "datafusion_objectstore_s3"
 path = "src/lib.rs"
 
+# https://doc.rust-lang.org/cargo/reference/profiles.html#overrides
+[profile.dev.package."*"]
+opt-level = 2
+
 [dependencies]
-arrow = {version = "9.0.0", features = ["prettyprint"]}
-async-trait = "0.1.52"
-aws-config = "0.9.0"
-aws-sdk-s3 = "0.9.0"
-aws-smithy-async = "0.39.0"
-aws-smithy-types = "0.39.0"
-aws-smithy-types-convert = {version = "0.39.0", features = ["convert-chrono"]}
-aws-types = "0.9.0"
-bytes = "1.1.0"
-datafusion = "7.0.0"
-futures = "0.3.19"
-http = "0.2.6"
-num_cpus = "1.13.1"
-tokio = {version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"]}
+datafusion-data-access = { git = "https://github.com/apache/arrow-datafusion.git", branch = "master" }
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1", features = ["rt"] }
+rust-s3 = { git = "https://github.com/mateuszkj/rust-s3.git", branch = "master" }
+chrono = { version = "0.4", default-features = false }
+parking_lot = "0.12"
+byteorder = "1"
+num_cpus = "1"
+bytes = "1"
+log = "0.4"
+
+[dev-dependencies]
+test-log = "0.2.10"
+env_logger = "0.9.0"
+arrow = { version = "11.1.0", features = ["prettyprint"] }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", branch = "master" }
+tokio = { version = "1.17.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"] }

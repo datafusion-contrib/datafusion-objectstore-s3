@@ -19,110 +19,84 @@
 
 //! [DataFusion-ObjectStore-S3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
 //! provides a `TableProvider` interface for using `Datafusion` to query data in S3.  This includes AWS S3
-//! and services such as MinIO that implement the S3 API.
+//! and services such as MinIO, seaweedfs or s3-server that implement the S3 API.
+//!
+//! ## Caching
+//!
+//! By defaults `S3FileSystem` tries to speed up query using techniques:
+//!  - concurrent prefetching parquet metadata during listing stage (configured by `S3FileSystemOptions.use_metadata_prefetch` and `concurrent_jobs`)
+//!  - using minimal request length (configured by `S3FileSystemOptions.min_request_size`)
+//!  - using multiple cache buffers per file (configured by `S3FileSystemOptions.max_cache_branches_per_file`)
+//!
+//! Motivation why caching is needed is because current datafusion implementation is not optimal for network file operations:
+//!  - datafusion fetch and parse metadata 2 times during every query (3 time if you count registering table). Once during creating physical plan and second while executing it.
+//!  - datafusion sometimes requests very small file chucks (I got a lots of 14 bytes queries)
+//!  - datafusion executing plan don't read file in sequence. It's start from beginning for every column.
 //!
 //! ## Examples
 //! Examples for querying AWS and other implementors, such as MinIO, are shown below.
 //!
-//! Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
+//! Connect to implementor of S3 API (MinIO, in this case) using access key and secret.
 //!
 //! ```rust
-//! # use std::sync::Arc;
-//! # use datafusion::error::Result;
-//! # use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
+//! use datafusion_objectstore_s3::object_store::s3::{S3FileSystem, S3FileSystemOptions};
+//! use datafusion_data_access::Result;
+//!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let s3_file_system = Arc::new(S3FileSystem::default().await);
+//! // Example credentials provided by MinIO
+//! const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
+//! const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+//! const BUCKET_NAME: &str = "data";
+//! const MINIO_ENDPOINT: &str = "http://localhost:9000";
+//!
+//! let s3_file_system = S3FileSystem::new_custom(
+//!     BUCKET_NAME,
+//!     MINIO_ENDPOINT,
+//!     Some(MINIO_ACCESS_KEY_ID),
+//!     Some(MINIO_SECRET_ACCESS_KEY),
+//!     S3FileSystemOptions::from_envs()?
+//! )?;
+//!
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! `S3FileSystem::default()` is a convenience wrapper for `S3FileSystem::new(None, None, None, None, None, None)`.
-//!
-//! Connect to implementor of S3 API (MinIO, in this case) using access key and secret.
-//!
-//! ```rust
-//! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
-//!
-//! use aws_types::credentials::SharedCredentialsProvider;
-//! use aws_types::credentials::Credentials;
-//! use aws_sdk_s3::Endpoint;
-//! use http::Uri;
-//!
-//! # #[tokio::main]
-//! # async fn main() {
-//! // Example credentials provided by MinIO
-//! const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
-//! const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-//! const PROVIDER_NAME: &str = "Static";
-//! const MINIO_ENDPOINT: &str = "http://localhost:9000";
-//!
-//! let s3_file_system = S3FileSystem::new(
-//!     Some(SharedCredentialsProvider::new(Credentials::new(
-//!         MINIO_ACCESS_KEY_ID,
-//!         MINIO_SECRET_ACCESS_KEY,
-//!         None,
-//!         None,
-//!         PROVIDER_NAME,
-//!     ))), // SharedCredentialsProvider
-//!     None, //Region
-//!     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))), //Endpoint
-//!     None, // RetryConfig
-//!     None, // AsyncSleep
-//!     None, // TimeoutConfig
-//! )
-//! .await;
-//! # }
-//! ```
-//!
-//! Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
+//! Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `SessionContext` so that it can be queried.
 //!
 //! ```rust
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
-//! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
-//!
-//! use aws_types::credentials::SharedCredentialsProvider;
-//! use aws_types::credentials::Credentials;
-//! use aws_sdk_s3::Endpoint;
-//! use http::Uri;
+//! use datafusion_objectstore_s3::object_store::s3::{S3FileSystem, S3FileSystemOptions};
 //!
 //! # const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 //! # const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-//! # const PROVIDER_NAME: &str = "Static";
+//! # const BUCKET_NAME: &str = "data";
 //! # const MINIO_ENDPOINT: &str = "http://localhost:9000";
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let filename = "data/alltypes_plain.snappy.parquet";
+//! let filename = "alltypes_plain.snappy.parquet";
 //!
-//! # let s3_file_system = Arc::new(S3FileSystem::new(
-//! #     Some(SharedCredentialsProvider::new(Credentials::new(
-//! #         MINIO_ACCESS_KEY_ID,
-//! #         MINIO_SECRET_ACCESS_KEY,
-//! #         None,
-//! #         None,
-//! #         PROVIDER_NAME,
-//! #     ))),
-//! #     None,
-//! #     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-//! #     None,
-//! #     None,
-//! #     None,
-//! # )
-//! # .await);
+//! # let s3_file_system = Arc::new(S3FileSystem::new_custom(
+//! #     BUCKET_NAME,
+//! #     MINIO_ENDPOINT,
+//! #     Some(MINIO_ACCESS_KEY_ID),
+//! #     Some(MINIO_SECRET_ACCESS_KEY),
+//! #     S3FileSystemOptions::default(),
+//! # )?);
 //!
 //! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
 //!
 //! let table = ListingTable::try_new(config)?;
 //!
-//! let mut ctx = ExecutionContext::new();
+//! let mut ctx = SessionContext::new();
 //!
 //! ctx.register_table("tbl", Arc::new(table))?;
 //!
@@ -132,56 +106,42 @@
 //! # }
 //! ```
 //!
-//! We can also register the `S3FileSystem` directly as an `ObjectStore` on an `ExecutionContext`. This provides an idiomatic way of creating `TableProviders` that can be queried.
+//! We can also register the `S3FileSystem` directly as an `ObjectStore` on an `SessionContext`. This provides an idiomatic way of creating `TableProviders` that can be queried.
 //!
 //! ```rust
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
-//! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
-//!
-//! use aws_types::credentials::SharedCredentialsProvider;
-//! use aws_types::credentials::Credentials;
-//! use aws_sdk_s3::Endpoint;
-//! use http::Uri;
+//! use datafusion_objectstore_s3::object_store::s3::{S3FileSystem, S3FileSystemOptions};
 //!
 //! # const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 //! # const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-//! # const PROVIDER_NAME: &str = "Static";
+//! # const BUCKET_NAME: &str = "data";
 //! # const MINIO_ENDPOINT: &str = "http://localhost:9000";
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! # let s3_file_system = Arc::new(S3FileSystem::new(
-//! #     Some(SharedCredentialsProvider::new(Credentials::new(
-//! #         MINIO_ACCESS_KEY_ID,
-//! #         MINIO_SECRET_ACCESS_KEY,
-//! #         None,
-//! #         None,
-//! #         PROVIDER_NAME,
-//! #     ))),
-//! #     None,
-//! #     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-//! #     None,
-//! #     None,
-//! #     None,
-//! # )
-//! # .await);
-//! let mut ctx = ExecutionContext::new();
+//! let s3_file_system = Arc::new(S3FileSystem::new_custom(
+//! #     BUCKET_NAME,
+//! #     MINIO_ENDPOINT,
+//! #     Some(MINIO_ACCESS_KEY_ID),
+//! #     Some(MINIO_SECRET_ACCESS_KEY),
+//! #     S3FileSystemOptions::default(),
+//! # )?);
+//! let mut ctx = SessionContext::new();
+//! let runtime_env = ctx.runtime_env();
 //!
-//! let uri = "s3://data/alltypes_plain.snappy.parquet";
-//! let (_, filename) = uri.split_once("://").unwrap();
+//! runtime_env.register_object_store("s3", s3_file_system.clone());
 //!
-//! ctx.register_object_store("s3", s3_file_system.clone());
+//! let uri = "s3://alltypes_plain.snappy.parquet";
+//! let (object_store, name) = runtime_env.object_store(uri)?;
 //!
-//! let (object_store, name) = ctx.object_store(uri)?;
-//!
-//! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
+//! let config = ListingTableConfig::new(s3_file_system, uri).infer().await?;
 //!
 //! let table = ListingTable::try_new(config)?;
 //!
@@ -194,5 +154,4 @@
 //! ```
 //!
 
-pub mod error;
 pub mod object_store;
