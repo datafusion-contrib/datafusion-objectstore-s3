@@ -17,6 +17,7 @@
 
 //! ObjectStore implementation for the Amazon S3 API
 
+use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::io;
 use std::io::{Cursor, ErrorKind, Read};
@@ -170,18 +171,22 @@ impl S3FileSystem {
     }
 }
 
+fn extract_schema_and_path(prefix: &str) -> (Option<&str>, &str) {
+    if let Some((scheme, path)) = prefix.split_once("://") {
+        (Some(scheme), path)
+    } else {
+        (None, prefix)
+    }
+}
+
 #[async_trait]
 impl ObjectStore for S3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        let prefix = if let Some((_scheme, path)) = prefix.split_once("://") {
-            path
-        } else {
-            prefix
-        };
+        let (schema, path) = extract_schema_and_path(prefix);
 
         let objects = self
             .bucket
-            .list(prefix.to_string(), None)
+            .list(path.to_string(), None)
             .await
             .map_err(|e| io::Error::new(ErrorKind::Other, e))?
             .into_iter()
@@ -189,7 +194,10 @@ impl ObjectStore for S3FileSystem {
             .map(|object| {
                 Ok(FileMeta {
                     sized_file: SizedFile {
-                        path: object.key,
+                        path: match schema {
+                            Some(schema) => format!("{}://{}", schema, object.key),
+                            None => object.key,
+                        },
                         size: object.size,
                     },
                     last_modified: Some(
@@ -232,7 +240,8 @@ impl ObjectStore for S3FileSystem {
                 let o = o.clone();
                 futures.push(async move {
                     println!("loading metadata for: {o:?}");
-                    let r = load_parquet_metadata(&bucket, o.path(), o.size()).await;
+                    let (_schema, path) = extract_schema_and_path(o.path());
+                    let r = load_parquet_metadata(&bucket, path, o.size()).await;
                     r.map(|(start, metadata)| (o, start, metadata))
                 });
             }
@@ -286,7 +295,8 @@ impl ObjectStore for S3FileSystem {
 
         Ok(Arc::new(S3CompatibleFileReader {
             id,
-            file,
+            path: file.path,
+            file_size: cached_file.f.size(),
             worker_tx: self.worker_tx.clone(),
             cache,
             min_request_size: self.options.min_request_size,
@@ -296,7 +306,8 @@ impl ObjectStore for S3FileSystem {
 
 struct S3CompatibleFileReader {
     id: usize,
-    file: SizedFile,
+    path: String,
+    file_size: u64,
     worker_tx: Arc<mpsc::Sender<GetObjectRange>>,
     cache: Cache,
     min_request_size: usize,
@@ -319,18 +330,22 @@ impl ObjectReader for S3CompatibleFileReader {
             return Ok(Box::new(Cursor::new(bytes)));
         }
 
-        let req_length = std::cmp::max(length, self.min_request_size);
-        // println!(
-        //     "direct id: {} file: {} start: {} len: {}, rlen: {}",
-        //     self.id, self.file.path, start, length, req_length
-        // );
+        let req_length = min(
+            max(length, self.min_request_size) as u64,
+            self.file_size - start,
+        );
+        println!(
+            "direct id: {} file: {} start: {} len: {}, rlen: {}",
+            self.id, self.path, start, length, req_length
+        );
 
+        let (_schema, path) = extract_schema_and_path(&self.path);
         let (tx, rx) = std::sync::mpsc::channel();
         let req = GetObjectRange {
             id: self.id,
-            path: self.file.path.clone(),
+            path: path.to_string(),
             start,
-            length: req_length,
+            length: req_length as usize,
             tx,
         };
 
@@ -361,7 +376,7 @@ impl ObjectReader for S3CompatibleFileReader {
     }
 
     fn length(&self) -> u64 {
-        self.file.size
+        self.file_size
     }
 }
 
