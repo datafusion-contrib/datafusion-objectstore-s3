@@ -4,19 +4,11 @@ S3 as an ObjectStore for [Datafusion](https://github.com/apache/arrow-datafusion
 
 ## Querying files on S3 with DataFusion
 
-This crate implements the DataFusion `ObjectStore` trait on AWS S3 and implementers of the S3 standard. We leverage the official [AWS Rust SDK](https://github.com/awslabs/aws-sdk-rust) for interacting with S3. While it is our understanding that the AWS APIs we are using a relatively stable, we can make no assurances on API stability either on AWS' part or within this crate. This crates API is tightly connected with DataFusion, a fast moving project, and as such we will make changes inline with those upstream changes.
+This crate implements the DataFusion `ObjectStore` trait on AWS S3 and implementers of the S3 standard. While it is our understanding that the AWS APIs we are using a relatively stable, we can make no assurances on API stability either on AWS' part or within this crate. This crates API is tightly connected with DataFusion, a fast moving project, and as such we will make changes inline with those upstream changes.
 
 ## Examples
 
 Examples for querying AWS and other implementors, such as MinIO, are shown below.
-
-Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
-
-```rust
-let s3_file_system = Arc::new(S3FileSystem::default().await);
-```
-
-`S3FileSystem::default()` is a convenience wrapper for `S3FileSystem::new(None, None, None, None, None, None)`.
 
 Connect to implementor of S3 API (MinIO, in this case) using access key and secret.
 

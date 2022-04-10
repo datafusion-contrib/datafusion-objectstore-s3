@@ -19,25 +19,22 @@
 
 //! [DataFusion-ObjectStore-S3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
 //! provides a `TableProvider` interface for using `Datafusion` to query data in S3.  This includes AWS S3
-//! and services such as MinIO that implement the S3 API.
+//! and services such as MinIO, seaweedfs or s3-server that implement the S3 API.
+//!
+//! ## Caching
+//!
+//! By defaults `S3FileSystem` tries to speed up query using techniques:
+//!  - concurrent prefetching parquet metadata during listing stage (configured by `S3FileSystemOptions.use_metadata_prefetch` and `concurrent_jobs`)
+//!  - using minimal request length (configured by `S3FileSystemOptions.min_request_size`)
+//!  - using multiple cache buffers per file (configured by `S3FileSystemOptions.max_cache_branches_per_file`)
+//!
+//! Motivation why caching is needed is because current datafusion implementation is not optimal for network file operations:
+//!  - datafusion fetch and parse metadata 2 times during every query (3 time if you count registering table). Once during creating physical plan and second while executing it.
+//!  - datafusion sometimes requests very small file chucks (I got a lots of 14 bytes queries)
+//!  - datafusion executing plan don't read file in sequence. It's start from beginning for every column.
 //!
 //! ## Examples
 //! Examples for querying AWS and other implementors, such as MinIO, are shown below.
-//!
-//! Load credentials from default AWS credential provider (such as environment or ~/.aws/credentials)
-//!
-//! ```ignore
-//! # use std::sync::Arc;
-//! # use datafusion::error::Result;
-//! # use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
-//! # #[tokio::main]
-//! # async fn main() -> Result<()> {
-//! let s3_file_system = Arc::new(S3FileSystem::default().await);
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! `S3FileSystem::default()` is a convenience wrapper for `S3FileSystem::new(None, None, None, None, None, None)`.
 //!
 //! Connect to implementor of S3 API (MinIO, in this case) using access key and secret.
 //!
