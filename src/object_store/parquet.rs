@@ -1,5 +1,6 @@
 use crate::object_store::worker::bucket_read;
 use byteorder::{ByteOrder, LittleEndian};
+use bytes::Bytes;
 use datafusion_data_access::Result;
 use s3::Bucket;
 use std::cmp::min;
@@ -12,11 +13,12 @@ const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];
 /// The number of bytes read at the end of the parquet file on first read
 const DEFAULT_FOOTER_READ_SIZE: usize = 64 * 1024;
 
+// based on https://github.com/apache/arrow-rs/blob/master/parquet/src/file/footer.rs#L46=
 pub async fn load_parquet_metadata(
     bucket: &Bucket,
     path: &str,
     file_size: u64,
-) -> Result<(u64, Vec<u8>)> {
+) -> Result<(u64, Bytes)> {
     // check file is large enough to hold footer
     if file_size < (FOOTER_SIZE as u64) {
         return Err(io::Error::new(
@@ -88,8 +90,10 @@ pub async fn load_parquet_metadata(
             start,
             FOOTER_SIZE + metadata_len as usize - default_end_len,
         )
-        .await?;
+        .await?
+        .to_vec();
         complementary_end_read.extend(default_len_end_buf);
-        Ok((start, complementary_end_read))
+
+        Ok((start, Bytes::from(complementary_end_read)))
     };
 }

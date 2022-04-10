@@ -41,88 +41,65 @@
 //!
 //! Connect to implementor of S3 API (MinIO, in this case) using access key and secret.
 //!
-//! ```ignore
-//! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
-//!
-//! use aws_types::credentials::SharedCredentialsProvider;
-//! use aws_types::credentials::Credentials;
-//! use aws_sdk_s3::Endpoint;
-//! use http::Uri;
+//! ```rust
+//! use datafusion_objectstore_s3::object_store::s3::{S3FileSystem, S3FileSystemOptions};
+//! use datafusion_data_access::Result;
 //!
 //! # #[tokio::main]
-//! # async fn main() {
+//! # async fn main() -> Result<()> {
 //! // Example credentials provided by MinIO
 //! const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 //! const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-//! const PROVIDER_NAME: &str = "Static";
+//! const BUCKET_NAME: &str = "data";
 //! const MINIO_ENDPOINT: &str = "http://localhost:9000";
 //!
-//! let s3_file_system = S3FileSystem::new(
-//!     Some(SharedCredentialsProvider::new(Credentials::new(
-//!         MINIO_ACCESS_KEY_ID,
-//!         MINIO_SECRET_ACCESS_KEY,
-//!         None,
-//!         None,
-//!         PROVIDER_NAME,
-//!     ))), // SharedCredentialsProvider
-//!     None, //Region
-//!     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))), //Endpoint
-//!     None, // RetryConfig
-//!     None, // AsyncSleep
-//!     None, // TimeoutConfig
-//! )
-//! .await;
+//! let s3_file_system = S3FileSystem::new_custom(
+//!     BUCKET_NAME,
+//!     MINIO_ENDPOINT,
+//!     Some(MINIO_ACCESS_KEY_ID),
+//!     Some(MINIO_SECRET_ACCESS_KEY),
+//!     S3FileSystemOptions::from_envs()?
+//! )?;
+//!
+//! # Ok(())
 //! # }
 //! ```
 //!
-//! Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
+//! Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `SessionContext` so that it can be queried.
 //!
-//! ```ignore
+//! ```rust
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
-//! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
-//!
-//! use aws_types::credentials::SharedCredentialsProvider;
-//! use aws_types::credentials::Credentials;
-//! use aws_sdk_s3::Endpoint;
-//! use http::Uri;
+//! use datafusion_objectstore_s3::object_store::s3::{S3FileSystem, S3FileSystemOptions};
 //!
 //! # const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 //! # const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-//! # const PROVIDER_NAME: &str = "Static";
+//! # const BUCKET_NAME: &str = "data";
 //! # const MINIO_ENDPOINT: &str = "http://localhost:9000";
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let filename = "data/alltypes_plain.snappy.parquet";
+//! let filename = "alltypes_plain.snappy.parquet";
 //!
-//! # let s3_file_system = Arc::new(S3FileSystem::new(
-//! #     Some(SharedCredentialsProvider::new(Credentials::new(
-//! #         MINIO_ACCESS_KEY_ID,
-//! #         MINIO_SECRET_ACCESS_KEY,
-//! #         None,
-//! #         None,
-//! #         PROVIDER_NAME,
-//! #     ))),
-//! #     None,
-//! #     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-//! #     None,
-//! #     None,
-//! #     None,
-//! # )
-//! # .await);
+//! # let s3_file_system = Arc::new(S3FileSystem::new_custom(
+//! #     BUCKET_NAME,
+//! #     MINIO_ENDPOINT,
+//! #     Some(MINIO_ACCESS_KEY_ID),
+//! #     Some(MINIO_SECRET_ACCESS_KEY),
+//! #     S3FileSystemOptions::default(),
+//! # )?);
 //!
 //! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
 //!
 //! let table = ListingTable::try_new(config)?;
 //!
-//! let mut ctx = ExecutionContext::new();
+//! let mut ctx = SessionContext::new();
 //!
 //! ctx.register_table("tbl", Arc::new(table))?;
 //!
@@ -132,56 +109,42 @@
 //! # }
 //! ```
 //!
-//! We can also register the `S3FileSystem` directly as an `ObjectStore` on an `ExecutionContext`. This provides an idiomatic way of creating `TableProviders` that can be queried.
+//! We can also register the `S3FileSystem` directly as an `ObjectStore` on an `SessionContext`. This provides an idiomatic way of creating `TableProviders` that can be queried.
 //!
-//! ```ignore
+//! ```rust
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
-//! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
-//!
-//! use aws_types::credentials::SharedCredentialsProvider;
-//! use aws_types::credentials::Credentials;
-//! use aws_sdk_s3::Endpoint;
-//! use http::Uri;
+//! use datafusion_objectstore_s3::object_store::s3::{S3FileSystem, S3FileSystemOptions};
 //!
 //! # const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 //! # const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-//! # const PROVIDER_NAME: &str = "Static";
+//! # const BUCKET_NAME: &str = "data";
 //! # const MINIO_ENDPOINT: &str = "http://localhost:9000";
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! # let s3_file_system = Arc::new(S3FileSystem::new(
-//! #     Some(SharedCredentialsProvider::new(Credentials::new(
-//! #         MINIO_ACCESS_KEY_ID,
-//! #         MINIO_SECRET_ACCESS_KEY,
-//! #         None,
-//! #         None,
-//! #         PROVIDER_NAME,
-//! #     ))),
-//! #     None,
-//! #     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-//! #     None,
-//! #     None,
-//! #     None,
-//! # )
-//! # .await);
-//! let mut ctx = ExecutionContext::new();
+//! let s3_file_system = Arc::new(S3FileSystem::new_custom(
+//! #     BUCKET_NAME,
+//! #     MINIO_ENDPOINT,
+//! #     Some(MINIO_ACCESS_KEY_ID),
+//! #     Some(MINIO_SECRET_ACCESS_KEY),
+//! #     S3FileSystemOptions::default(),
+//! # )?);
+//! let mut ctx = SessionContext::new();
+//! let runtime_env = ctx.runtime_env();
 //!
-//! let uri = "s3://data/alltypes_plain.snappy.parquet";
-//! let (_, filename) = uri.split_once("://").unwrap();
+//! runtime_env.register_object_store("s3", s3_file_system.clone());
 //!
-//! ctx.register_object_store("s3", s3_file_system.clone());
+//! let uri = "s3://alltypes_plain.snappy.parquet";
+//! let (object_store, name) = runtime_env.object_store(uri)?;
 //!
-//! let (object_store, name) = ctx.object_store(uri)?;
-//!
-//! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
+//! let config = ListingTableConfig::new(s3_file_system, uri).infer().await?;
 //!
 //! let table = ListingTable::try_new(config)?;
 //!

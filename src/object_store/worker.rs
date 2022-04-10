@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use datafusion_data_access::Result;
 use s3::command::Command;
 use s3::request::Reqwest;
@@ -29,16 +30,11 @@ impl BucketWorker {
                     .expect("send results on bucket worker thread");
             });
         }
-        println!("finished bucket worker thread");
+        log::debug!("finished bucket worker thread");
     }
 }
 
-pub async fn bucket_read(
-    bucket: &Bucket,
-    path: &str,
-    start: u64,
-    length: usize,
-) -> Result<Vec<u8>> {
+pub async fn bucket_read(bucket: &Bucket, path: &str, start: u64, length: usize) -> Result<Bytes> {
     let end = if length > 0 {
         Some(start + length as u64 - 1)
     } else {
@@ -65,7 +61,7 @@ pub async fn bucket_read(
         .await
         .map_err(|e| io::Error::new(ErrorKind::Other, e))?;
 
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 #[derive(Debug)]
@@ -74,5 +70,5 @@ pub struct GetObjectRange {
     pub path: String,
     pub start: u64,
     pub length: usize,
-    pub tx: std::sync::mpsc::Sender<Result<Vec<u8>>>,
+    pub tx: std::sync::mpsc::Sender<Result<Bytes>>,
 }
