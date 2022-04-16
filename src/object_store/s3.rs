@@ -16,7 +16,7 @@
 // under the License.
 
 //! ObjectStore implementation for the Amazon S3 API
-//! 
+//!
 
 // TODO: Describe IAM permissions needed for each operation
 // TODO: Add general config options, including whether to allow creation of buckets
@@ -30,75 +30,108 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, Future, FutureExt};
 
-use datafusion::datafusion_data_access::{SizedFile, FileMeta, Result};
 use datafusion::datafusion_data_access::object_store::{
-    FileMetaStream, ListEntryStream, ObjectReader, ObjectWriter, ObjectStore,
+    path_without_scheme, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, ObjectWriter,
 };
+use datafusion::datafusion_data_access::{FileMeta, Result, SizedFile};
 
 use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
 use aws_sdk_s3::types::SdkError;
+use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
 use aws_smithy_async::rt::sleep::AsyncSleep;
 use aws_smithy_types::timeout::Config;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
-use tokio::io::{BufWriter, AsyncWrite};
+use log::debug;
+use tokio::io::{AsyncWrite, BufWriter};
+use tokio::runtime::Handle;
 
-fn sdk_error_to_io_error<E: std::error::Error + std::marker::Send + std::marker::Sync + 'static>(err: SdkError<E>) -> std::io::Error {
+fn sdk_error_to_io_error<E: std::error::Error + std::marker::Send + std::marker::Sync + 'static>(
+    err: SdkError<E>,
+) -> std::io::Error {
     match err {
-        SdkError::ConstructionFailure(inner_err) => 
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, inner_err),
-        SdkError::TimeoutError(inner_err) =>
-            std::io::Error::new(std::io::ErrorKind::TimedOut, inner_err),
+        SdkError::ConstructionFailure(inner_err) => {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, inner_err)
+        }
+        SdkError::TimeoutError(inner_err) => {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, inner_err)
+        }
         // Using interrupted since semantically it means these may be retried
-        SdkError::DispatchFailure(inner_err) =>
-            std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err),
-        SdkError::ResponseError { err: inner_err, raw: _ } =>
-            std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err),
-        SdkError::ServiceError { err: inner_err, raw: _ } =>
-            std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err),
+        SdkError::DispatchFailure(inner_err) => {
+            std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err)
+        }
+        SdkError::ResponseError {
+            err: inner_err,
+            raw: _,
+        } => std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err),
+        SdkError::ServiceError {
+            err: inner_err,
+            raw: _,
+        } => std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err),
     }
 }
 
-
-/// new_client creates a new aws_sdk_s3::Client
-/// this uses aws_config::load_from_env() as a base config then allows users to override specific settings if required
-///
-/// an example use case for overriding is to specify an endpoint which is not Amazon S3 such as MinIO or Ceph.
-async fn new_client(
+#[derive(Debug, Clone)]
+struct ClientOptions {
     credentials_provider: Option<SharedCredentialsProvider>,
     region: Option<Region>,
     endpoint: Option<Endpoint>,
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
     timeout_config: Option<Config>,
-) -> Client {
+}
+
+impl ClientOptions {
+    fn new(
+        credentials_provider: Option<SharedCredentialsProvider>,
+        region: Option<Region>,
+        endpoint: Option<Endpoint>,
+        retry_config: Option<RetryConfig>,
+        sleep: Option<Arc<dyn AsyncSleep>>,
+        timeout_config: Option<Config>,
+    ) -> Self {
+        Self {
+            credentials_provider,
+            region,
+            endpoint,
+            retry_config,
+            sleep,
+            timeout_config,
+        }
+    }
+}
+
+/// new_client creates a new aws_sdk_s3::Client
+/// this uses aws_config::load_from_env() as a base config then allows users to override specific settings if required
+///
+/// an example use case for overriding is to specify an endpoint which is not Amazon S3 such as MinIO or Ceph.
+async fn new_client(options: ClientOptions) -> Client {
     let config = aws_config::load_from_env().await;
 
-    let region_provider = RegionProviderChain::first_try(region)
+    let region_provider = RegionProviderChain::first_try(options.region)
         .or_default_provider()
         .or_else(Region::new("us-west-2"));
 
     let mut config_builder = Builder::from(&config).region(region_provider.region().await);
 
-    if let Some(credentials_provider) = credentials_provider {
+    if let Some(credentials_provider) = options.credentials_provider {
         config_builder = config_builder.credentials_provider(credentials_provider);
     }
 
-    if let Some(endpoint) = endpoint {
+    if let Some(endpoint) = options.endpoint {
         config_builder = config_builder.endpoint_resolver(endpoint);
     }
 
-    if let Some(retry_config) = retry_config {
+    if let Some(retry_config) = options.retry_config {
         config_builder = config_builder.retry_config(retry_config);
     }
 
-    if let Some(sleep) = sleep {
+    if let Some(sleep) = options.sleep {
         config_builder = config_builder.sleep_impl(sleep);
     }
 
-    if let Some(timeout_config) = timeout_config {
+    if let Some(timeout_config) = options.timeout_config {
         config_builder = config_builder.timeout_config(timeout_config);
     };
 
@@ -109,12 +142,7 @@ async fn new_client(
 /// `ObjectStore` implementation for the Amazon S3 API
 #[derive(Debug)]
 pub struct S3FileSystem {
-    credentials_provider: Option<SharedCredentialsProvider>,
-    region: Option<Region>,
-    endpoint: Option<Endpoint>,
-    retry_config: Option<RetryConfig>,
-    sleep: Option<Arc<dyn AsyncSleep>>,
-    timeout_config: Option<Config>,
+    client_options: ClientOptions,
     client: Client,
 }
 
@@ -129,13 +157,23 @@ impl S3FileSystem {
         timeout_config: Option<Config>,
     ) -> Self {
         Self {
-            credentials_provider: credentials_provider.clone(),
-            region: region.clone(),
-            endpoint: endpoint.clone(),
-            retry_config: retry_config.clone(),
-            sleep: sleep.clone(),
-            timeout_config: timeout_config.clone(),
-            client: new_client(credentials_provider, region, endpoint, None, None, None).await,
+            client_options: ClientOptions::new(
+                credentials_provider.clone(),
+                region.clone(),
+                endpoint.clone(),
+                retry_config,
+                sleep,
+                timeout_config,
+            ),
+            client: new_client(ClientOptions::new(
+                credentials_provider,
+                region,
+                endpoint,
+                None,
+                None,
+                None,
+            ))
+            .await,
         }
     }
 }
@@ -179,33 +217,15 @@ impl ObjectStore for S3FileSystem {
 
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(AmazonS3FileReader::new(
-            self.credentials_provider.clone(),
-            self.region.clone(),
-            self.endpoint.clone(),
-            self.retry_config.clone(),
-            self.sleep.clone(),
-            self.timeout_config.clone(),
+            self.client_options.clone(),
             file,
         )?))
     }
 
-    fn file_writer(&self, file: SizedFile) -> Result<Arc<dyn ObjectWriter>> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-        let client = rt.block_on(async move {
-             new_client(
-                self.credentials_provider.clone(),
-                self.region.clone(),
-                self.endpoint.clone(),
-                self.retry_config.clone(),
-                self.sleep.clone(),
-                self.timeout_config.clone()).await
-        });
-        
+    fn file_writer(&self, path: String) -> Result<Arc<dyn ObjectWriter>> {
         Ok(Arc::new(AmazonS3FileWriter::new(
-            client,
-            file,
+            self.client_options.clone(),
+            path,
         )?))
     }
 }
@@ -219,33 +239,15 @@ impl S3FileSystem {
 }
 
 struct AmazonS3FileReader {
-    credentials_provider: Option<SharedCredentialsProvider>,
-    region: Option<Region>,
-    endpoint: Option<Endpoint>,
-    retry_config: Option<RetryConfig>,
-    sleep: Option<Arc<dyn AsyncSleep>>,
-    timeout_config: Option<Config>,
+    client_options: ClientOptions,
     file: SizedFile,
 }
 
 impl AmazonS3FileReader {
     #[allow(clippy::too_many_arguments)]
-    fn new(
-        credentials_provider: Option<SharedCredentialsProvider>,
-        region: Option<Region>,
-        endpoint: Option<Endpoint>,
-        retry_config: Option<RetryConfig>,
-        sleep: Option<Arc<dyn AsyncSleep>>,
-        timeout_config: Option<Config>,
-        file: SizedFile,
-    ) -> Result<Self> {
+    fn new(client_options: ClientOptions, file: SizedFile) -> Result<Self> {
         Ok(Self {
-            credentials_provider,
-            region,
-            endpoint,
-            retry_config,
-            sleep,
-            timeout_config,
+            client_options,
             file,
         })
     }
@@ -258,12 +260,7 @@ impl ObjectReader for AmazonS3FileReader {
     }
 
     fn sync_chunk_reader(&self, start: u64, length: usize) -> Result<Box<dyn Read + Send + Sync>> {
-        let credentials_provider = self.credentials_provider.clone();
-        let region = self.region.clone();
-        let endpoint = self.endpoint.clone();
-        let retry_config = self.retry_config.clone();
-        let sleep = self.sleep.clone();
-        let timeout_config = self.timeout_config.clone();
+        let client_options = self.client_options.clone();
         let file_path = self.file.path.clone();
 
         // once the async chunk file readers have been implemented this complexity can be removed
@@ -276,15 +273,7 @@ impl ObjectReader for AmazonS3FileReader {
 
             rt.block_on(async move {
                 // aws_sdk_s3::Client appears bound to the runtime and will deadlock if cloned from the main runtime
-                let client = new_client(
-                    credentials_provider,
-                    region,
-                    endpoint,
-                    retry_config,
-                    sleep,
-                    timeout_config,
-                )
-                .await;
+                let client = new_client(client_options).await;
 
                 let (bucket, key) = match file_path.split_once('/') {
                     Some((bucket, prefix)) => (bucket, prefix),
@@ -307,17 +296,20 @@ impl ObjectReader for AmazonS3FileReader {
                         let data = res.body.collect().await;
                         match data {
                             Ok(data) => Ok(data.into_bytes()),
-                            Err(err) => Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, err))
+                            Err(err) => {
+                                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, err))
+                            }
                         }
                     }
-                    Err(err) => Err(std::io::Error::new(std::io::ErrorKind::Interrupted, err))
+                    Err(err) => Err(std::io::Error::new(std::io::ErrorKind::Interrupted, err)),
                 };
 
                 tx.send(bytes).unwrap();
             })
         });
 
-        let bytes = rx.recv_timeout(Duration::from_secs(10))
+        let bytes = rx
+            .recv_timeout(Duration::from_secs(10))
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::TimedOut, err))??;
 
         Ok(Box::new(bytes.reader()))
@@ -329,28 +321,26 @@ impl ObjectReader for AmazonS3FileReader {
 }
 
 struct AmazonS3FileWriter {
-    client: Client,
-    file: SizedFile,
+    client_options: ClientOptions,
+    path: String,
 }
 
 impl AmazonS3FileWriter {
     #[allow(clippy::too_many_arguments)]
-    fn new(
-        client: Client,
-        file: SizedFile,
-    ) -> Result<Self> {
+    fn new(client_options: ClientOptions, path: String) -> Result<Self> {
         Ok(Self {
-            client,
-            file,
+            client_options,
+            path: path_without_scheme(&path).to_string(),
         })
     }
 }
 
 #[async_trait]
 impl ObjectWriter for AmazonS3FileWriter {
-    async fn writer(&self) -> Result<Box<dyn AsyncWrite>> {
-        let output_stream = S3ObjectOutputStream::async_new(self.file.clone(), self.client.clone()).await?;
-        Ok(Box::new(output_stream))
+    async fn writer(&self) -> Result<Pin<Box<dyn AsyncWrite>>> {
+        let client = new_client(self.client_options.clone()).await;
+        let output_stream = S3ObjectOutputStream::async_new(self.path.clone(), client).await?;
+        Ok(Box::pin(output_stream))
     }
 
     fn sync_writer(&self) -> Result<Box<dyn Write + Send + Sync>> {
@@ -361,64 +351,65 @@ impl ObjectWriter for AmazonS3FileWriter {
 /// Implements AsyncWrite for multi-part upload on S3 object
 struct S3ObjectOutputStream {
     // This struct just wraps S3MultipartUpload with a BufWriter
-    inner: BufWriter<S3MultipartUpload>
+    inner: BufWriter<S3MultipartUpload>,
 }
 
 impl S3ObjectOutputStream {
-    async fn async_new(file: SizedFile, client: Client) -> Result<Self> {
+    async fn async_new(path: String, client: Client) -> Result<Self> {
         // S3 requires each upload part to be at least 5 MB.
         let buffer_size = 5 * 1024 * 1024;
-        let upload = S3MultipartUpload::async_new(file, client).await?;
-        Ok(Self { inner: BufWriter::with_capacity(buffer_size, upload) })
+        let upload = S3MultipartUpload::async_new(path, client).await?;
+        Ok(Self {
+            inner: BufWriter::with_capacity(buffer_size, upload),
+        })
     }
 }
 
 impl AsyncWrite for S3ObjectOutputStream {
     fn poll_write(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>, 
-        buf: &[u8]
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
     ) -> Poll<Result<usize>> {
         Pin::new(&mut self.inner).poll_write(cx, buf)
     }
-    fn poll_flush(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>
-    ) -> Poll<Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         Pin::new(&mut self.inner).poll_flush(cx)
     }
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>
-    ) -> Poll<Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
 enum S3MultipartUploadState {
     Ready,
-    UploadInProgress(Pin<Box<dyn Future<Output = Result<()>>>>),
+    UploadInProgress(Pin<Box<dyn Future<Output = Result<Option<String>>>>>),
     CompleteInProgress(Pin<Box<dyn Future<Output = Result<()>>>>),
-    Completed
+    Completed,
 }
 /// Write and AsyncWrite wrapper around S3 multi-part upload operation
-/// 
+///
 /// Do not use this type directly. Use S3ObjectOutputStream instead.
 struct S3MultipartUpload {
     client: Client,
+    handle: Handle,
     bucket: String,
     key: String,
     upload_id: String,
     current_part_id: i32,
     state: S3MultipartUploadState,
+    completed_parts: Vec<aws_sdk_s3::model::CompletedPart>,
 }
-// Check out this writestate type
+
+// See guide on multi-part upload here:
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
 
 impl S3MultipartUpload {
-    async fn async_new(file: SizedFile, client: Client) -> Result<Self> {
-        let (bucket, key) = split_s3_path(&file.path);
+    async fn async_new(path: String, client: Client) -> Result<Self> {
+        let (bucket, key) = split_s3_path(&path);
         // Start multipart upload
-        let response = client.create_multipart_upload()
+        let response = client
+            .create_multipart_upload()
             .bucket(bucket)
             .key(key)
             .send()
@@ -427,107 +418,153 @@ impl S3MultipartUpload {
 
         Ok(Self {
             client,
+            handle: Handle::current(),
             bucket: bucket.to_string(),
             key: key.to_string(),
             // Panic if: AWS claimed create multipart upload was successful but didn't provide an upload id
             upload_id: response.upload_id.unwrap(),
-            current_part_id: 0,
+            current_part_id: 1,
             state: S3MultipartUploadState::Ready,
-         })
+            completed_parts: Vec::new(),
+        })
     }
 }
 
+// TODO: What if we could upload up to N parts in parallel?
 impl AsyncWrite for S3MultipartUpload {
     fn poll_write(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>, 
-        buf: &[u8]
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
     ) -> Poll<std::result::Result<usize, std::io::Error>> {
-        match &mut self.state {
-            S3MultipartUploadState::UploadInProgress(fut) => {
-                match Pin::new(fut).poll(cx) {
-                    Poll::Ready(val) => {
-                        val?;
+        loop {
+            match &mut self.state {
+                S3MultipartUploadState::UploadInProgress(fut) => match Pin::new(fut).poll(cx) {
+                    Poll::Ready(e_tag) => {
+                        let current_part_id = self.current_part_id.clone();
+                        self.completed_parts.push(
+                            aws_sdk_s3::model::CompletedPart::builder()
+                                .set_e_tag(e_tag?)
+                                .set_part_number(Some(current_part_id))
+                                .build(),
+                        );
                         self.state = S3MultipartUploadState::Ready;
                         self.current_part_id += 1;
-                        Poll::Ready(Ok(buf.len()))
+                        return Poll::Ready(Ok(buf.len()));
                     }
-                    Poll::Pending => Poll::Pending
+                    Poll::Pending => {
+                        return Poll::Pending;
+                    }
+                },
+                S3MultipartUploadState::Ready => {
+                    let response = self
+                        .client
+                        .upload_part()
+                        .bucket(self.bucket.clone())
+                        .key(self.key.clone())
+                        .upload_id(self.upload_id.clone())
+                        .part_number(self.current_part_id)
+                        .body(buf.to_vec().into())
+                        .send()
+                        .then(|response| async move {
+                            Ok(response.map_err(sdk_error_to_io_error)?.e_tag)
+                        });
+                    self.state = S3MultipartUploadState::UploadInProgress(Box::pin(response));
                 }
-            }
-            S3MultipartUploadState::Ready => {
-                // TODO: Provide checksum as well
-                let response = self.client.upload_part()
-                    .bucket(self.bucket.clone())
-                    .key(self.key.clone())
-                    .upload_id(self.upload_id.clone())
-                    .part_number(self.current_part_id)
-                    .body(buf.to_vec().into())
-                    .send()
-                    .then(|response| async move {
-                        response.map_err(sdk_error_to_io_error)?;
-                        Ok(())
-                    });
-                self.state = S3MultipartUploadState::UploadInProgress(Box::pin(response));
-                // TODO: use cx.waker() to tell caller to try again
-                Poll::Pending
-            }
-            _ => {
-                panic!("Cannot upload part for completed stream");
+                _ => {
+                    panic!("Cannot upload part for completed stream");
+                }
             }
         }
     }
 
     fn poll_flush(
-        self: Pin<&mut Self>, 
-        _cx: &mut Context<'_>
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
         // TODO: Do we need to implement this?
         Poll::Ready(Ok(()))
     }
     fn poll_shutdown(
-        mut self: Pin<&mut Self>, 
-        cx: &mut Context<'_>
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
-        match &mut self.state {
-            S3MultipartUploadState::CompleteInProgress(fut) => {
-                match Pin::new(fut).poll(cx) {
+        loop {
+            match &mut self.state {
+                S3MultipartUploadState::CompleteInProgress(fut) => match Pin::new(fut).poll(cx) {
                     Poll::Ready(val) => {
                         val?;
                         self.state = S3MultipartUploadState::Completed;
-                        Poll::Ready(Ok(()))
+                        return Poll::Ready(Ok(()));
                     }
-                    Poll::Pending => Poll::Pending
+                    Poll::Pending => {
+                        return Poll::Pending;
+                    }
+                },
+                S3MultipartUploadState::Ready => {
+                    let parts = std::mem::replace(&mut self.completed_parts, Vec::new());
+                    let upload_data = aws_sdk_s3::model::CompletedMultipartUpload::builder()
+                        .set_parts(Some(parts))
+                        .build();
+                    let response = self
+                        .client
+                        .complete_multipart_upload()
+                        .bucket(self.bucket.clone())
+                        .key(self.key.clone())
+                        .upload_id(self.upload_id.clone())
+                        .multipart_upload(upload_data)
+                        .send()
+                        .then(|response| async {
+                            response.map_err(sdk_error_to_io_error)?;
+                            Ok(())
+                        });
+                    self.state = S3MultipartUploadState::CompleteInProgress(Box::pin(response));
+                    // TODO: use cx.waker() to tell caller to try again
                 }
-            }
-            S3MultipartUploadState::Ready => {
-                let response = self.client.complete_multipart_upload()
-                    .bucket(self.bucket.clone())
-                    .key(self.key.clone())
-                    .upload_id(self.upload_id.clone())
-                    .send()
-                    .then(|response| async {
-                        response.map_err(sdk_error_to_io_error)?;
-                        Ok(())
-                    });
-                self.state = S3MultipartUploadState::CompleteInProgress(Box::pin(response));
-                // TODO: use cx.waker() to tell caller to try again
-                Poll::Pending
-            }
-            S3MultipartUploadState::UploadInProgress(_) => {
-                panic!("Trying to complete multipart upload while a part is still uploading.")
-            }
-            S3MultipartUploadState::Completed => {
-                panic!("Upload has already completed.")
+                S3MultipartUploadState::UploadInProgress(_) => {
+                    panic!("Trying to complete multipart upload while a part is still uploading.")
+                }
+                S3MultipartUploadState::Completed => {
+                    panic!("Upload has already completed.")
+                }
             }
         }
     }
 }
 
-impl Drop for S3ObjectOutputStream {
+impl Drop for S3MultipartUpload {
     fn drop(&mut self) {
-        // TODO: Send request to close the multipart upload, if needed
-        todo!()
+        match self.state {
+            S3MultipartUploadState::Completed => {
+                return;
+            }
+            _ => {
+                let client = self.client.clone();
+                let bucket = self.bucket.clone();
+                let key = self.key.clone();
+                let upload_id = self.upload_id.clone();
+                self.handle.spawn(async move {
+                    let response = client
+                        .abort_multipart_upload()
+                        .bucket(bucket.clone())
+                        .key(key.clone())
+                        .upload_id(upload_id.clone())
+                        .send()
+                        .await;
+                    match response {
+                        Ok(_) => {},
+                        Err(err) => {
+                            // TODO: Should we print a message if the abort failed?
+                            debug!("Failed to abort multipart upload (bucket = {}, key = {}, upload_id = {}).
+                                    You may incur charges for this data until it is aborted.
+                                    Upstream error: {}",
+                                   bucket, key, upload_id, err);
+                        }
+                    }
+                    ()
+                });
+            }
+        }
     }
 }
 
@@ -546,20 +583,20 @@ mod tests {
     use datafusion::assert_batches_eq;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
-    use datafusion::error::{DataFusionError, Result as DataFusionResult};
+    use datafusion::error::{Result as DataFusionResult};
     use datafusion::prelude::SessionContext;
     use futures::StreamExt;
     use http::Uri;
+    use tokio::io::AsyncWriteExt;
+    use std::fs;
 
     const ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
     const SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
     const PROVIDER_NAME: &str = "Static";
     const MINIO_ENDPOINT: &str = "http://localhost:9000";
 
-    // Test that `S3FileSystem` can read files
-    #[tokio::test]
-    async fn test_read_files() -> DataFusionResult<()> {
-        let s3_file_system = S3FileSystem::new(
+    async fn get_filesystem() -> S3FileSystem {
+        S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
                 SECRET_ACCESS_KEY,
@@ -573,7 +610,13 @@ mod tests {
             None,
             None,
         )
-        .await;
+        .await
+    }
+
+    // Test that `S3FileSystem` can read files
+    #[tokio::test]
+    async fn test_read_files() -> Result<()> {
+        let s3_file_system = get_filesystem().await;
 
         let mut files = s3_file_system.list_file("data").await?;
 
@@ -678,26 +721,40 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_write_files() -> Result<()> {
+        let s3_file_system = get_filesystem().await;
+
+        // Generate a bunch of bytes at least 20MB
+        let size = 20 * 1024 * 1024;
+        let bufs: Vec<u8> = (0..size).map(|_| 42).collect();
+
+        // Create writer
+        let mut writer = s3_file_system
+            .file_writer("s3://data/s3-temp/test_write".to_string())?
+            .writer()
+            .await
+            .unwrap();
+
+        // Write bytes
+        // TODO in batches
+        writer.write(&bufs).await?;
+
+        writer.shutdown().await?;
+
+        // Read back bytes
+        let written_data = fs::read("parquet-testing/data/s3-temp/test_write").expect("Unable to read file");
+
+        // Validate they are same
+        assert_eq!(bufs, written_data);
+
+        Ok(())
+    }
+
     // Test that a SQL query can be executed on a Parquet file that was read from `S3FileSystem`
     #[tokio::test]
     async fn test_sql_query() -> DataFusionResult<()> {
-        let s3_file_system = Arc::new(
-            S3FileSystem::new(
-                Some(SharedCredentialsProvider::new(Credentials::new(
-                    ACCESS_KEY_ID,
-                    SECRET_ACCESS_KEY,
-                    None,
-                    None,
-                    PROVIDER_NAME,
-                ))),
-                None,
-                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-                None,
-                None,
-                None,
-            )
-            .await,
-        );
+        let s3_file_system = Arc::new(get_filesystem().await);
 
         let filename = "data/alltypes_plain.snappy.parquet";
 
@@ -728,23 +785,7 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "Could not parse metadata: bad data")]
     async fn test_read_alternative_bucket() {
-        let s3_file_system = Arc::new(
-            S3FileSystem::new(
-                Some(SharedCredentialsProvider::new(Credentials::new(
-                    ACCESS_KEY_ID,
-                    SECRET_ACCESS_KEY,
-                    None,
-                    None,
-                    PROVIDER_NAME,
-                ))),
-                None,
-                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-                None,
-                None,
-                None,
-            )
-            .await,
-        );
+        let s3_file_system = Arc::new(get_filesystem().await);
 
         let filename = "bad_data/PARQUET-1481.parquet";
 
@@ -761,27 +802,12 @@ mod tests {
     // Test that `S3FileSystem` can be registered as object store on a DataFusion `SessionContext`
     #[tokio::test]
     async fn test_ctx_register_object_store() -> DataFusionResult<()> {
-        let s3_file_system = Arc::new(
-            S3FileSystem::new(
-                Some(SharedCredentialsProvider::new(Credentials::new(
-                    ACCESS_KEY_ID,
-                    SECRET_ACCESS_KEY,
-                    None,
-                    None,
-                    PROVIDER_NAME,
-                ))),
-                None,
-                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-                None,
-                None,
-                None,
-            )
-            .await,
-        );
+        let s3_file_system = Arc::new(get_filesystem().await);
 
         let ctx = SessionContext::new();
 
-        ctx.runtime_env().register_object_store("s3", s3_file_system);
+        ctx.runtime_env()
+            .register_object_store("s3", s3_file_system);
 
         let (_, name) = ctx.runtime_env().object_store("s3").unwrap();
         assert_eq!(name, "s3");
@@ -793,21 +819,7 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "NoSuchBucket")]
     async fn test_read_nonexistent_bucket() {
-        let s3_file_system = S3FileSystem::new(
-            Some(SharedCredentialsProvider::new(Credentials::new(
-                ACCESS_KEY_ID,
-                SECRET_ACCESS_KEY,
-                None,
-                None,
-                PROVIDER_NAME,
-            ))),
-            None,
-            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-            None,
-            None,
-            None,
-        )
-        .await;
+        let s3_file_system = get_filesystem().await;
 
         let mut files = s3_file_system.list_file("nonexistent_data").await.unwrap();
 
@@ -829,21 +841,8 @@ mod tests {
     // Test that no files are returned if a non existent file URI is provided
     #[tokio::test]
     async fn test_read_nonexistent_file() {
-        let s3_file_system = S3FileSystem::new(
-            Some(SharedCredentialsProvider::new(Credentials::new(
-                ACCESS_KEY_ID,
-                SECRET_ACCESS_KEY,
-                None,
-                None,
-                PROVIDER_NAME,
-            ))),
-            None,
-            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-            None,
-            None,
-            None,
-        )
-        .await;
+        let s3_file_system = get_filesystem().await;
+
         let mut files = s3_file_system
             .list_file("data/nonexistent_file.txt")
             .await
