@@ -75,14 +75,14 @@
 //! # }
 //! ```
 //!
-//! Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `ExecutionContext` so that it can be queried.
+//! Using DataFusion's `ListingOtions` and `ListingTable` we register a table into a DataFusion `SessionContext` so that it can be queried.
 //!
 //! ```rust
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
@@ -122,7 +122,7 @@
 //!
 //! let table = ListingTable::try_new(config)?;
 //!
-//! let mut ctx = ExecutionContext::new();
+//! let mut ctx = SessionContext::new();
 //!
 //! ctx.register_table("tbl", Arc::new(table))?;
 //!
@@ -132,14 +132,14 @@
 //! # }
 //! ```
 //!
-//! We can also register the `S3FileSystem` directly as an `ObjectStore` on an `ExecutionContext`. This provides an idiomatic way of creating `TableProviders` that can be queried.
+//! We can also register the `S3FileSystem` directly as an `ObjectStore` on an `SessionContext`. This provides an idiomatic way of creating `TableProviders` that can be queried.
 //!
 //! ```rust
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
@@ -172,14 +172,14 @@
 //! #     None,
 //! # )
 //! # .await);
-//! let mut ctx = ExecutionContext::new();
+//! let mut ctx = SessionContext::new();
 //!
 //! let uri = "s3://data/alltypes_plain.snappy.parquet";
 //! let (_, filename) = uri.split_once("://").unwrap();
 //!
-//! ctx.register_object_store("s3", s3_file_system.clone());
+//! ctx.runtime_env().register_object_store("s3", s3_file_system.clone());
 //!
-//! let (object_store, name) = ctx.object_store(uri)?;
+//! let (object_store, name) = ctx.runtime_env().object_store(uri)?;
 //!
 //! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
 //!

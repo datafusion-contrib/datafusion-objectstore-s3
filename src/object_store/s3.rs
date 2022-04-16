@@ -546,7 +546,8 @@ mod tests {
     use datafusion::assert_batches_eq;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
-    use datafusion::prelude::ExecutionContext;
+    use datafusion::error::{DataFusionError, Result as DataFusionResult};
+    use datafusion::prelude::SessionContext;
     use futures::StreamExt;
     use http::Uri;
 
@@ -557,7 +558,7 @@ mod tests {
 
     // Test that `S3FileSystem` can read files
     #[tokio::test]
-    async fn test_read_files() -> Result<()> {
+    async fn test_read_files() -> DataFusionResult<()> {
         let s3_file_system = S3FileSystem::new(
             Some(SharedCredentialsProvider::new(Credentials::new(
                 ACCESS_KEY_ID,
@@ -595,7 +596,7 @@ mod tests {
 
     // Test that reading files with `S3FileSystem` produces the expected results
     #[tokio::test]
-    async fn test_read_range() -> Result<()> {
+    async fn test_read_range() -> DataFusionResult<()> {
         let start = 10;
         let length = 128;
 
@@ -644,7 +645,7 @@ mod tests {
 
     // Test that reading Parquet file with `S3FileSystem` can create a `ListingTable`
     #[tokio::test]
-    async fn test_read_parquet() -> Result<()> {
+    async fn test_read_parquet() -> DataFusionResult<()> {
         let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
@@ -679,7 +680,7 @@ mod tests {
 
     // Test that a SQL query can be executed on a Parquet file that was read from `S3FileSystem`
     #[tokio::test]
-    async fn test_sql_query() -> Result<()> {
+    async fn test_sql_query() -> DataFusionResult<()> {
         let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
@@ -706,7 +707,7 @@ mod tests {
 
         let table = ListingTable::try_new(config)?;
 
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
 
         ctx.register_table("tbl", Arc::new(table)).unwrap();
 
@@ -757,9 +758,9 @@ mod tests {
         table.scan(&None, &[], Some(1024)).await.unwrap();
     }
 
-    // Test that `S3FileSystem` can be registered as object store on a DataFusion `ExecutionContext`
+    // Test that `S3FileSystem` can be registered as object store on a DataFusion `SessionContext`
     #[tokio::test]
-    async fn test_ctx_register_object_store() -> Result<()> {
+    async fn test_ctx_register_object_store() -> DataFusionResult<()> {
         let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
@@ -778,11 +779,11 @@ mod tests {
             .await,
         );
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
 
-        ctx.register_object_store("s3", s3_file_system);
+        ctx.runtime_env().register_object_store("s3", s3_file_system);
 
-        let (_, name) = ctx.object_store("s3").unwrap();
+        let (_, name) = ctx.runtime_env().object_store("s3").unwrap();
         assert_eq!(name, "s3");
 
         Ok(())
