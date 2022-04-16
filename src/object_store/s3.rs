@@ -16,29 +16,51 @@
 // under the License.
 
 //! ObjectStore implementation for the Amazon S3 API
+//! 
 
-use std::io::Read;
+// TODO: Describe IAM permissions needed for each operation
+// TODO: Add general config options, including whether to allow creation of buckets
+
+use std::io::{Read, Write};
+use std::pin::Pin;
 use std::sync::{mpsc, Arc};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures::{stream, AsyncRead};
+use futures::{stream, AsyncRead, Future, FutureExt};
 
-use datafusion::datasource::object_store::SizedFile;
-use datafusion::datasource::object_store::{
-    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
+use datafusion::datafusion_data_access::{SizedFile, FileMeta, Result};
+use datafusion::datafusion_data_access::object_store::{
+    FileMetaStream, ListEntryStream, ObjectReader, ObjectWriter, ObjectStore,
 };
-use datafusion::error::{DataFusionError, Result};
 
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
+use aws_sdk_s3::types::SdkError;
 use aws_smithy_async::rt::sleep::AsyncSleep;
 use aws_smithy_types::timeout::Config;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
+use tokio::io::{BufWriter, AsyncWrite};
 
-use crate::error::S3Error;
+fn sdk_error_to_io_error<E: std::error::Error + std::marker::Send + std::marker::Sync + 'static>(err: SdkError<E>) -> std::io::Error {
+    match err {
+        SdkError::ConstructionFailure(inner_err) => 
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, inner_err),
+        SdkError::TimeoutError(inner_err) =>
+            std::io::Error::new(std::io::ErrorKind::TimedOut, inner_err),
+        // Using interrupted since semantically it means these may be retried
+        SdkError::DispatchFailure(inner_err) =>
+            std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err),
+        SdkError::ResponseError { err: inner_err, raw: _ } =>
+            std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err),
+        SdkError::ServiceError { err: inner_err, raw: _ } =>
+            std::io::Error::new(std::io::ErrorKind::Interrupted, inner_err),
+    }
+}
+
 
 /// new_client creates a new aws_sdk_s3::Client
 /// this uses aws_config::load_from_env() as a base config then allows users to override specific settings if required
@@ -121,19 +143,17 @@ impl S3FileSystem {
 #[async_trait]
 impl ObjectStore for S3FileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        let (bucket, prefix) = match prefix.split_once('/') {
-            Some((bucket, prefix)) => (bucket.to_owned(), prefix),
-            None => (prefix.to_owned(), ""),
-        };
+        let (bucket, prefix) = split_s3_path(prefix);
+        let bucket = bucket.to_owned();
 
         let objects = self
             .client
             .list_objects_v2()
-            .bucket(&bucket)
+            .bucket(bucket.clone())
             .prefix(prefix)
             .send()
             .await
-            .map_err(|err| DataFusionError::External(Box::new(S3Error::AWS(format!("{:?}", err)))))?
+            .map_err(sdk_error_to_io_error)?
             .contents()
             .unwrap_or_default()
             .to_vec();
@@ -141,7 +161,7 @@ impl ObjectStore for S3FileSystem {
         let result = stream::iter(objects.into_iter().map(move |object| {
             Ok(FileMeta {
                 sized_file: SizedFile {
-                    path: format!("{}/{}", &bucket, object.key().unwrap_or("")),
+                    path: format!("{}/{}", bucket, object.key().unwrap_or("")),
                     size: object.size() as u64,
                 },
                 last_modified: object
@@ -165,6 +185,26 @@ impl ObjectStore for S3FileSystem {
             self.retry_config.clone(),
             self.sleep.clone(),
             self.timeout_config.clone(),
+            file,
+        )?))
+    }
+
+    fn file_writer(&self, file: SizedFile) -> Result<Arc<dyn ObjectWriter>> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+        let client = rt.block_on(async move {
+             new_client(
+                self.credentials_provider.clone(),
+                self.region.clone(),
+                self.endpoint.clone(),
+                self.retry_config.clone(),
+                self.sleep.clone(),
+                self.timeout_config.clone()).await
+        });
+        
+        Ok(Arc::new(AmazonS3FileWriter::new(
+            client,
             file,
         )?))
     }
@@ -267,30 +307,235 @@ impl ObjectReader for AmazonS3FileReader {
                         let data = res.body.collect().await;
                         match data {
                             Ok(data) => Ok(data.into_bytes()),
-                            Err(err) => Err(DataFusionError::External(Box::new(S3Error::AWS(
-                                format!("{:?}", err),
-                            )))),
+                            Err(err) => Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, err))
                         }
                     }
-                    Err(err) => Err(DataFusionError::External(Box::new(S3Error::AWS(format!(
-                        "{:?}",
-                        err
-                    ))))),
+                    Err(err) => Err(std::io::Error::new(std::io::ErrorKind::Interrupted, err))
                 };
 
                 tx.send(bytes).unwrap();
             })
         });
 
-        let bytes = rx.recv_timeout(Duration::from_secs(10)).map_err(|err| {
-            DataFusionError::External(Box::new(S3Error::AWS(format!("{:?}", err))))
-        })??;
+        let bytes = rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::TimedOut, err))??;
 
         Ok(Box::new(bytes.reader()))
     }
 
     fn length(&self) -> u64 {
         self.file.size
+    }
+}
+
+struct AmazonS3FileWriter {
+    client: Client,
+    file: SizedFile,
+}
+
+impl AmazonS3FileWriter {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        client: Client,
+        file: SizedFile,
+    ) -> Result<Self> {
+        Ok(Self {
+            client,
+            file,
+        })
+    }
+}
+
+#[async_trait]
+impl ObjectWriter for AmazonS3FileWriter {
+    async fn writer(&self) -> Result<Box<dyn AsyncWrite>> {
+        let output_stream = S3ObjectOutputStream::async_new(self.file.clone(), self.client.clone()).await?;
+        Ok(Box::new(output_stream))
+    }
+
+    fn sync_writer(&self) -> Result<Box<dyn Write + Send + Sync>> {
+        todo!()
+    }
+}
+
+/// Implements AsyncWrite for multi-part upload on S3 object
+struct S3ObjectOutputStream {
+    // This struct just wraps S3MultipartUpload with a BufWriter
+    inner: BufWriter<S3MultipartUpload>
+}
+
+impl S3ObjectOutputStream {
+    async fn async_new(file: SizedFile, client: Client) -> Result<Self> {
+        // S3 requires each upload part to be at least 5 MB.
+        let buffer_size = 5 * 1024 * 1024;
+        let upload = S3MultipartUpload::async_new(file, client).await?;
+        Ok(Self { inner: BufWriter::with_capacity(buffer_size, upload) })
+    }
+}
+
+impl AsyncWrite for S3ObjectOutputStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>, 
+        cx: &mut Context<'_>, 
+        buf: &[u8]
+    ) -> Poll<Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: Pin<&mut Self>, 
+        cx: &mut Context<'_>
+    ) -> Poll<Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>, 
+        cx: &mut Context<'_>
+    ) -> Poll<Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+enum S3MultipartUploadState {
+    Ready,
+    UploadInProgress(Pin<Box<dyn Future<Output = Result<()>>>>),
+    CompleteInProgress(Pin<Box<dyn Future<Output = Result<()>>>>),
+    Completed
+}
+/// Write and AsyncWrite wrapper around S3 multi-part upload operation
+/// 
+/// Do not use this type directly. Use S3ObjectOutputStream instead.
+struct S3MultipartUpload {
+    client: Client,
+    bucket: String,
+    key: String,
+    upload_id: String,
+    current_part_id: i32,
+    state: S3MultipartUploadState,
+}
+// Check out this writestate type
+
+impl S3MultipartUpload {
+    async fn async_new(file: SizedFile, client: Client) -> Result<Self> {
+        let (bucket, key) = split_s3_path(&file.path);
+        // Start multipart upload
+        let response = client.create_multipart_upload()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(sdk_error_to_io_error)?;
+
+        Ok(Self {
+            client,
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+            // Panic if: AWS claimed create multipart upload was successful but didn't provide an upload id
+            upload_id: response.upload_id.unwrap(),
+            current_part_id: 0,
+            state: S3MultipartUploadState::Ready,
+         })
+    }
+}
+
+impl AsyncWrite for S3MultipartUpload {
+    fn poll_write(
+        mut self: Pin<&mut Self>, 
+        cx: &mut Context<'_>, 
+        buf: &[u8]
+    ) -> Poll<std::result::Result<usize, std::io::Error>> {
+        match &mut self.state {
+            S3MultipartUploadState::UploadInProgress(fut) => {
+                match Pin::new(fut).poll(cx) {
+                    Poll::Ready(val) => {
+                        val?;
+                        self.state = S3MultipartUploadState::Ready;
+                        self.current_part_id += 1;
+                        Poll::Ready(Ok(buf.len()))
+                    }
+                    Poll::Pending => Poll::Pending
+                }
+            }
+            S3MultipartUploadState::Ready => {
+                // TODO: Provide checksum as well
+                let response = self.client.upload_part()
+                    .bucket(self.bucket.clone())
+                    .key(self.key.clone())
+                    .upload_id(self.upload_id.clone())
+                    .part_number(self.current_part_id)
+                    .body(buf.to_vec().into())
+                    .send()
+                    .then(|response| async move {
+                        response.map_err(sdk_error_to_io_error)?;
+                        Ok(())
+                    });
+                self.state = S3MultipartUploadState::UploadInProgress(Box::pin(response));
+                // TODO: use cx.waker() to tell caller to try again
+                Poll::Pending
+            }
+            _ => {
+                panic!("Cannot upload part for completed stream");
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>, 
+        _cx: &mut Context<'_>
+    ) -> Poll<std::result::Result<(), std::io::Error>> {
+        // TODO: Do we need to implement this?
+        Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>, 
+        cx: &mut Context<'_>
+    ) -> Poll<std::result::Result<(), std::io::Error>> {
+        match &mut self.state {
+            S3MultipartUploadState::CompleteInProgress(fut) => {
+                match Pin::new(fut).poll(cx) {
+                    Poll::Ready(val) => {
+                        val?;
+                        self.state = S3MultipartUploadState::Completed;
+                        Poll::Ready(Ok(()))
+                    }
+                    Poll::Pending => Poll::Pending
+                }
+            }
+            S3MultipartUploadState::Ready => {
+                let response = self.client.complete_multipart_upload()
+                    .bucket(self.bucket.clone())
+                    .key(self.key.clone())
+                    .upload_id(self.upload_id.clone())
+                    .send()
+                    .then(|response| async {
+                        response.map_err(sdk_error_to_io_error)?;
+                        Ok(())
+                    });
+                self.state = S3MultipartUploadState::CompleteInProgress(Box::pin(response));
+                // TODO: use cx.waker() to tell caller to try again
+                Poll::Pending
+            }
+            S3MultipartUploadState::UploadInProgress(_) => {
+                panic!("Trying to complete multipart upload while a part is still uploading.")
+            }
+            S3MultipartUploadState::Completed => {
+                panic!("Upload has already completed.")
+            }
+        }
+    }
+}
+
+impl Drop for S3ObjectOutputStream {
+    fn drop(&mut self) {
+        // TODO: Send request to close the multipart upload, if needed
+        todo!()
+    }
+}
+
+/// Given S3 path, split out bucket from rest of path
+fn split_s3_path(prefix: &str) -> (&str, &str) {
+    match prefix.split_once('/') {
+        Some((bucket, prefix)) => (bucket, prefix),
+        None => (prefix, ""),
     }
 }
 
