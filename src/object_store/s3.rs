@@ -331,7 +331,9 @@ mod tests {
 
         let mut files = s3_file_system.list_file("data").await?;
 
+        let mut files_handled = 0;
         while let Some(file) = files.next().await {
+            files_handled += 1;
             let sized_file = file.unwrap().sized_file;
             let mut reader = s3_file_system
                 .file_reader(sized_file.clone())
@@ -344,6 +346,7 @@ mod tests {
 
             assert_eq!(size as u64, sized_file.size);
         }
+        assert!(files_handled > 0);
 
         Ok(())
     }
@@ -379,7 +382,9 @@ mod tests {
             .list_file("data/alltypes_plain.snappy.parquet")
             .await?;
 
+        let mut files_handled = 0;
         if let Some(file) = files.next().await {
+            files_handled += 1;
             let sized_file = file.unwrap().sized_file;
             let mut reader = s3_file_system
                 .file_reader(sized_file)
@@ -393,6 +398,7 @@ mod tests {
             assert_eq!(size, length);
             assert_eq!(&reader_bytes, raw_slice);
         }
+        assert!(files_handled > 0);
 
         Ok(())
     }
