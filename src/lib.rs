@@ -82,7 +82,7 @@
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
@@ -122,7 +122,7 @@
 //!
 //! let table = ListingTable::try_new(config)?;
 //!
-//! let mut ctx = ExecutionContext::new();
+//! let mut ctx = SessionContext::new();
 //!
 //! ctx.register_table("tbl", Arc::new(table))?;
 //!
@@ -139,8 +139,10 @@
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
+//! use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+//! use datafusion::execution::context::SessionConfig;
 //! use datafusion::error::Result;
 //!
 //! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
@@ -172,14 +174,17 @@
 //! #     None,
 //! # )
 //! # .await);
-//! let mut ctx = ExecutionContext::new();
+//!
+//! //let session_config = SessionConfig::new();
+//! //let runtime_env = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+//! //runtime_env.register_object_store("s3", s3_file_system);
+//! //let ctx = SessionContext::with_config_rt(session_config, runtime_env);
+//! //let (_, name) = runtime_env.object_store("s3").unwrap();
+//!
+//! let ctx = SessionContext::new();
 //!
 //! let uri = "s3://data/alltypes_plain.snappy.parquet";
 //! let (_, filename) = uri.split_once("://").unwrap();
-//!
-//! ctx.register_object_store("s3", s3_file_system.clone());
-//!
-//! let (object_store, name) = ctx.object_store(uri)?;
 //!
 //! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
 //!
@@ -192,7 +197,6 @@
 //! # Ok(())
 //! # }
 //! ```
-//!
 
 pub mod error;
 pub mod object_store;
