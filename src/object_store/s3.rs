@@ -24,8 +24,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::{stream, AsyncRead};
 
+use datafusion_data_access::object_store::{
+    FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
+};
 use datafusion_data_access::{FileMeta, Result, SizedFile};
-use datafusion_data_access::object_store::{FileMetaStream, ListEntryStream, ObjectReader, ObjectStore};
 
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
@@ -327,7 +329,7 @@ mod tests {
             None,
             None,
         )
-            .await;
+        .await;
 
         let mut files = s3_file_system.list_file("data").await?;
 
@@ -377,7 +379,7 @@ mod tests {
             None,
             None,
         )
-            .await;
+        .await;
         let mut files = s3_file_system
             .list_file("data/alltypes_plain.snappy.parquet")
             .await?;
@@ -425,7 +427,7 @@ mod tests {
                 None,
                 None,
             )
-                .await,
+            .await,
         );
 
         let filename = "data/alltypes_plain.snappy.parquet";
@@ -437,7 +439,10 @@ mod tests {
 
         let table = ListingTable::try_new(config).map_err(map_datafusion_error_to_io_error)?;
 
-        let exec = table.scan(&None, &[], Some(1024)).await.map_err(map_datafusion_error_to_io_error)?;
+        let exec = table
+            .scan(&None, &[], Some(1024))
+            .await
+            .map_err(map_datafusion_error_to_io_error)?;
         assert_eq!(exec.statistics().num_rows, Some(2));
 
         Ok(())
@@ -461,14 +466,15 @@ mod tests {
                 None,
                 None,
             )
-                .await,
+            .await,
         );
 
         let filename = "data/alltypes_plain.snappy.parquet";
 
         let config = ListingTableConfig::new(s3_file_system, filename)
             .infer()
-            .await.map_err(map_datafusion_error_to_io_error)?;
+            .await
+            .map_err(map_datafusion_error_to_io_error)?;
 
         let table = ListingTable::try_new(config).map_err(map_datafusion_error_to_io_error)?;
 
@@ -476,7 +482,13 @@ mod tests {
 
         ctx.register_table("tbl", Arc::new(table)).unwrap();
 
-        let batches = ctx.sql("SELECT * FROM tbl").await.map_err(map_datafusion_error_to_io_error)?.collect().await.map_err(map_datafusion_error_to_io_error)?;
+        let batches = ctx
+            .sql("SELECT * FROM tbl")
+            .await
+            .map_err(map_datafusion_error_to_io_error)?
+            .collect()
+            .await
+            .map_err(map_datafusion_error_to_io_error)?;
         let expected = vec![
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
             "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
@@ -508,7 +520,7 @@ mod tests {
                 None,
                 None,
             )
-                .await,
+            .await,
         );
 
         let filename = "bad_data/PARQUET-1481.parquet";
@@ -541,11 +553,12 @@ mod tests {
                 None,
                 None,
             )
-                .await,
+            .await,
         );
 
         let ctx = SessionContext::new();
-        ctx.runtime_env().register_object_store("s3", s3_file_system);
+        ctx.runtime_env()
+            .register_object_store("s3", s3_file_system);
         let (_, name) = ctx.runtime_env().object_store("s3").unwrap();
         assert_eq!(name, "s3");
 
@@ -570,7 +583,7 @@ mod tests {
             None,
             None,
         )
-            .await;
+        .await;
 
         let mut files = s3_file_system.list_file("nonexistent_data").await.unwrap();
 
@@ -606,7 +619,7 @@ mod tests {
             None,
             None,
         )
-            .await;
+        .await;
         let mut files = s3_file_system
             .list_file("data/nonexistent_file.txt")
             .await
