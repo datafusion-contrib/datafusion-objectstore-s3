@@ -30,8 +30,8 @@ futures = "0.3.19"
 http = "0.2.6"
 num_cpus = "1.13.1"
 tokio = {version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"]}
-datafusion-data-access = { path = "../arrow-datafusion/data-access" }
+datafusion-data-access = { git = "https://github.com/apache/arrow-datafusion" }
 
 [dev-dependencies]
-datafusion = { path = "../arrow-datafusion/datafusion/core" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion" }
 
