@@ -301,7 +301,6 @@ mod tests {
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
     use datafusion::error::DataFusionError;
-    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::prelude::*;
     use futures::StreamExt;
     use http::Uri;
