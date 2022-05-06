@@ -545,13 +545,9 @@ mod tests {
                 .await,
         );
 
-        //let session_config = SessionConfig::new();
-        let runtime_env = RuntimeEnv::new(RuntimeConfig::default())
-            .unwrap();
-        runtime_env.register_object_store("s3", s3_file_system);
-        //let ctx = SessionContext::with_config_rt(session_config, Arc::new(runtime_env));
-
-        let (_, name) = runtime_env.object_store("s3").unwrap();
+        let ctx = SessionContext::new();
+        ctx.runtime_env().register_object_store("s3", s3_file_system);
+        let (_, name) = ctx.runtime_env().object_store("s3").unwrap();
         assert_eq!(name, "s3");
 
         Ok(())
