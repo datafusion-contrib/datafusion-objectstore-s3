@@ -17,7 +17,6 @@ name = "datafusion_objectstore_s3"
 path = "src/lib.rs"
 
 [dependencies]
-arrow = { version = "13", features = ["prettyprint"] }
 async-trait = "0.1.52"
 aws-config = "0.9.0"
 aws-sdk-s3 = "0.9.0"
@@ -33,5 +32,6 @@ tokio = {version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync",
 datafusion-data-access = { version = "8.0.0" }
 
 [dev-dependencies]
+arrow = { version = "13", features = ["prettyprint"] }
 datafusion = { version = "8.0.0" }
 
