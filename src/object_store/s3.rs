@@ -17,18 +17,17 @@
 
 //! ObjectStore implementation for the Amazon S3 API
 
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::{stream, AsyncRead};
 
-use datafusion::datasource::object_store::SizedFile;
-use datafusion::datasource::object_store::{
-    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
+use datafusion_data_access::object_store::{
+    FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
-use datafusion::error::{DataFusionError, Result};
+use datafusion_data_access::{FileMeta, Result, SizedFile};
 
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
@@ -133,7 +132,9 @@ impl ObjectStore for S3FileSystem {
             .prefix(prefix)
             .send()
             .await
-            .map_err(|err| DataFusionError::External(Box::new(S3Error::AWS(format!("{:?}", err)))))?
+            .map_err(|err| {
+                std::io::Error::new(ErrorKind::Other, S3Error::AWS(format!("{:?}", err)))
+            })?
             .contents()
             .unwrap_or_default()
             .to_vec();
@@ -267,15 +268,16 @@ impl ObjectReader for AmazonS3FileReader {
                         let data = res.body.collect().await;
                         match data {
                             Ok(data) => Ok(data.into_bytes()),
-                            Err(err) => Err(DataFusionError::External(Box::new(S3Error::AWS(
-                                format!("{:?}", err),
-                            )))),
+                            Err(err) => Err(std::io::Error::new(
+                                ErrorKind::Other,
+                                S3Error::AWS(format!("{:?}", err)),
+                            )),
                         }
                     }
-                    Err(err) => Err(DataFusionError::External(Box::new(S3Error::AWS(format!(
-                        "{:?}",
-                        err
-                    ))))),
+                    Err(err) => Err(std::io::Error::new(
+                        ErrorKind::Other,
+                        S3Error::AWS(format!("{:?}", err)),
+                    )),
                 };
 
                 tx.send(bytes).unwrap();
@@ -283,7 +285,7 @@ impl ObjectReader for AmazonS3FileReader {
         });
 
         let bytes = rx.recv_timeout(Duration::from_secs(10)).map_err(|err| {
-            DataFusionError::External(Box::new(S3Error::AWS(format!("{:?}", err))))
+            std::io::Error::new(ErrorKind::TimedOut, S3Error::AWS(format!("{:?}", err)))
         })??;
 
         Ok(Box::new(bytes.reader()))
@@ -293,7 +295,6 @@ impl ObjectReader for AmazonS3FileReader {
         self.file.size
     }
 }
-
 #[cfg(test)]
 mod tests {
     use crate::object_store::s3::*;
@@ -301,7 +302,8 @@ mod tests {
     use datafusion::assert_batches_eq;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
-    use datafusion::prelude::ExecutionContext;
+    use datafusion::error::DataFusionError;
+    use datafusion::prelude::*;
     use futures::StreamExt;
     use http::Uri;
 
@@ -403,6 +405,10 @@ mod tests {
         Ok(())
     }
 
+    fn map_datafusion_error_to_io_error(err: DataFusionError) -> std::io::Error {
+        std::io::Error::new(ErrorKind::Other, S3Error::AWS(format!("{:?}", err)))
+    }
+
     // Test that reading Parquet file with `S3FileSystem` can create a `ListingTable`
     #[tokio::test]
     async fn test_read_parquet() -> Result<()> {
@@ -428,11 +434,15 @@ mod tests {
 
         let config = ListingTableConfig::new(s3_file_system, filename)
             .infer()
-            .await?;
+            .await
+            .map_err(map_datafusion_error_to_io_error)?;
 
-        let table = ListingTable::try_new(config)?;
+        let table = ListingTable::try_new(config).map_err(map_datafusion_error_to_io_error)?;
 
-        let exec = table.scan(&None, &[], Some(1024)).await?;
+        let exec = table
+            .scan(&None, &[], Some(1024))
+            .await
+            .map_err(map_datafusion_error_to_io_error)?;
         assert_eq!(exec.statistics().num_rows, Some(2));
 
         Ok(())
@@ -463,22 +473,29 @@ mod tests {
 
         let config = ListingTableConfig::new(s3_file_system, filename)
             .infer()
-            .await?;
+            .await
+            .map_err(map_datafusion_error_to_io_error)?;
 
-        let table = ListingTable::try_new(config)?;
+        let table = ListingTable::try_new(config).map_err(map_datafusion_error_to_io_error)?;
 
-        let mut ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
 
         ctx.register_table("tbl", Arc::new(table)).unwrap();
 
-        let batches = ctx.sql("SELECT * FROM tbl").await?.collect().await?;
+        let batches = ctx
+            .sql("SELECT * FROM tbl")
+            .await
+            .map_err(map_datafusion_error_to_io_error)?
+            .collect()
+            .await
+            .map_err(map_datafusion_error_to_io_error)?;
         let expected = vec![
-        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-        "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
-        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-        "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01 00:00:00 |",
-        "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
-        "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
+            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+            "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
+            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+            "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01 00:00:00 |",
+            "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
+            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
         ];
         assert_batches_eq!(expected, &batches);
         Ok(())
@@ -539,11 +556,10 @@ mod tests {
             .await,
         );
 
-        let ctx = ExecutionContext::new();
-
-        ctx.register_object_store("s3", s3_file_system);
-
-        let (_, name) = ctx.object_store("s3").unwrap();
+        let ctx = SessionContext::new();
+        ctx.runtime_env()
+            .register_object_store("s3", s3_file_system);
+        let (_, name) = ctx.runtime_env().object_store("s3").unwrap();
         assert_eq!(name, "s3");
 
         Ok(())

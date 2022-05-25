@@ -82,7 +82,7 @@
 //!
 //! use datafusion::datasource::listing::*;
 //! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
@@ -122,7 +122,7 @@
 //!
 //! let table = ListingTable::try_new(config)?;
 //!
-//! let mut ctx = ExecutionContext::new();
+//! let mut ctx = SessionContext::new();
 //!
 //! ctx.register_table("tbl", Arc::new(table))?;
 //!
@@ -138,61 +138,59 @@
 //! use std::sync::Arc;
 //!
 //! use datafusion::datasource::listing::*;
-//! use datafusion::datasource::TableProvider;
-//! use datafusion::prelude::ExecutionContext;
-//! use datafusion::datasource::file_format::parquet::ParquetFormat;
 //! use datafusion::error::Result;
 //!
 //! use datafusion_objectstore_s3::object_store::s3::S3FileSystem;
 //!
-//! use aws_types::credentials::SharedCredentialsProvider;
-//! use aws_types::credentials::Credentials;
 //! use aws_sdk_s3::Endpoint;
+//! use aws_types::credentials::Credentials;
+//! use aws_types::credentials::SharedCredentialsProvider;
+//! use datafusion::prelude::SessionContext;
 //! use http::Uri;
 //!
-//! # const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
-//! # const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
-//! # const PROVIDER_NAME: &str = "Static";
-//! # const MINIO_ENDPOINT: &str = "http://localhost:9000";
+//! const MINIO_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
+//! const MINIO_SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+//! const PROVIDER_NAME: &str = "Static";
+//! const MINIO_ENDPOINT: &str = "http://localhost:9000";
 //!
-//! # #[tokio::main]
-//! # async fn main() -> Result<()> {
-//! # let s3_file_system = Arc::new(S3FileSystem::new(
-//! #     Some(SharedCredentialsProvider::new(Credentials::new(
-//! #         MINIO_ACCESS_KEY_ID,
-//! #         MINIO_SECRET_ACCESS_KEY,
-//! #         None,
-//! #         None,
-//! #         PROVIDER_NAME,
-//! #     ))),
-//! #     None,
-//! #     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
-//! #     None,
-//! #     None,
-//! #     None,
-//! # )
-//! # .await);
-//! let mut ctx = ExecutionContext::new();
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     let s3_file_system = Arc::new(
+//!         S3FileSystem::new(
+//!             Some(SharedCredentialsProvider::new(Credentials::new(
+//!                 MINIO_ACCESS_KEY_ID,
+//!                 MINIO_SECRET_ACCESS_KEY,
+//!                 None,
+//!                 None,
+//!                 PROVIDER_NAME,
+//!             ))),
+//!             None,
+//!             Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+//!             None,
+//!             None,
+//!             None,
+//!         )
+//!         .await,
+//!     );
 //!
-//! let uri = "s3://data/alltypes_plain.snappy.parquet";
-//! let (_, filename) = uri.split_once("://").unwrap();
+//!     let ctx = SessionContext::new();
 //!
-//! ctx.register_object_store("s3", s3_file_system.clone());
+//!     let uri = "s3://data/alltypes_plain.snappy.parquet";
+//!     let (_, filename) = uri.split_once("://").unwrap();
 //!
-//! let (object_store, name) = ctx.object_store(uri)?;
+//!     let config = ListingTableConfig::new(s3_file_system, filename)
+//!         .infer()
+//!         .await?;
 //!
-//! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
+//!     let table = ListingTable::try_new(config)?;
 //!
-//! let table = ListingTable::try_new(config)?;
+//!     ctx.register_table("tbl", Arc::new(table))?;
 //!
-//! ctx.register_table("tbl", Arc::new(table))?;
-//!
-//! let df = ctx.sql("SELECT * FROM tbl").await?;
-//! df.show();
-//! # Ok(())
-//! # }
+//!     let df = ctx.sql("SELECT * FROM tbl").await?;
+//!     df.show().await?;
+//!     Ok(())
+//! }
 //! ```
-//!
 
 pub mod error;
 pub mod object_store;
