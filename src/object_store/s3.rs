@@ -119,7 +119,10 @@ impl S3FileSystem {
 
 #[async_trait]
 impl ObjectStore for S3FileSystem {
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+    async fn list_file(&self, uri: &str) -> Result<FileMetaStream> {
+        let (_, prefix) = uri.split_once("s3://").ok_or_else(|| {
+            std::io::Error::new(ErrorKind::Other, S3Error::AWS("No s3 scheme found".into()))
+        })?;
         let (bucket, prefix) = match prefix.split_once('/') {
             Some((bucket, prefix)) => (bucket.to_owned(), prefix),
             None => (prefix.to_owned(), ""),
@@ -331,7 +334,7 @@ mod tests {
         )
         .await;
 
-        let mut files = s3_file_system.list_file("data").await?;
+        let mut files = s3_file_system.list_file("s3://data").await?;
 
         let mut files_handled = 0;
         while let Some(file) = files.next().await {
@@ -381,7 +384,7 @@ mod tests {
         )
         .await;
         let mut files = s3_file_system
-            .list_file("data/alltypes_plain.snappy.parquet")
+            .list_file("s3://data/alltypes_plain.snappy.parquet")
             .await?;
 
         let mut files_handled = 0;
@@ -430,7 +433,7 @@ mod tests {
             .await,
         );
 
-        let filename = "data/alltypes_plain.snappy.parquet";
+        let filename = "s3://data/alltypes_plain.snappy.parquet";
 
         let config = ListingTableConfig::new(s3_file_system, filename)
             .infer()
@@ -469,7 +472,7 @@ mod tests {
             .await,
         );
 
-        let filename = "data/alltypes_plain.snappy.parquet";
+        let filename = "s3://data/alltypes_plain.snappy.parquet";
 
         let config = ListingTableConfig::new(s3_file_system, filename)
             .infer()
@@ -523,7 +526,7 @@ mod tests {
             .await,
         );
 
-        let filename = "bad_data/PARQUET-1481.parquet";
+        let filename = "s3://bad_data/PARQUET-1481.parquet";
 
         let config = ListingTableConfig::new(s3_file_system, filename)
             .infer()
@@ -585,7 +588,10 @@ mod tests {
         )
         .await;
 
-        let mut files = s3_file_system.list_file("nonexistent_data").await.unwrap();
+        let mut files = s3_file_system
+            .list_file("s3://nonexistent_data")
+            .await
+            .unwrap();
 
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
@@ -621,7 +627,7 @@ mod tests {
         )
         .await;
         let mut files = s3_file_system
-            .list_file("data/nonexistent_file.txt")
+            .list_file("s3://data/nonexistent_file.txt")
             .await
             .unwrap();
 

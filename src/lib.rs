@@ -100,7 +100,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let filename = "data/alltypes_plain.snappy.parquet";
+//! let filename = "s3://data/alltypes_plain.snappy.parquet";
 //!
 //! # let s3_file_system = Arc::new(S3FileSystem::new(
 //! #     Some(SharedCredentialsProvider::new(Credentials::new(
@@ -176,9 +176,8 @@
 //!     let ctx = SessionContext::new();
 //!
 //!     let uri = "s3://data/alltypes_plain.snappy.parquet";
-//!     let (_, filename) = uri.split_once("://").unwrap();
 //!
-//!     let config = ListingTableConfig::new(s3_file_system, filename)
+//!     let config = ListingTableConfig::new(s3_file_system, uri)
 //!         .infer()
 //!         .await?;
 //!
