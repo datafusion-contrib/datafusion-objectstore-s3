@@ -504,6 +504,40 @@ mod tests {
         Ok(())
     }
 
+    // Test that a SQL query can be executed on a Parquet file that was read from `S3FileSystem`
+    #[tokio::test]
+    async fn test_create_external_table_sql_query() -> Result<()> {
+        let s3_file_system = Arc::new(
+            S3FileSystem::new(
+                Some(SharedCredentialsProvider::new(Credentials::new(
+                    ACCESS_KEY_ID,
+                    SECRET_ACCESS_KEY,
+                    None,
+                    None,
+                    PROVIDER_NAME,
+                ))),
+                None,
+                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                None,
+                None,
+                None,
+            )
+            .await,
+        );
+
+        let ctx = SessionContext::new();
+
+        ctx.runtime_env()
+            .register_object_store("s3", s3_file_system);
+
+        let sql = "CREATE EXTERNAL TABLE abc STORED AS PARQUET LOCATION 's3://data/alltypes_plain.snappy.parquet'";
+
+        ctx.sql(sql).await.unwrap().collect().await.unwrap();
+
+        ctx.table("abc").unwrap();
+        Ok(())
+    }
+
     // Test that the S3FileSystem allows reading from different buckets
     #[tokio::test]
     #[should_panic(expected = "Could not parse metadata: bad data")]
