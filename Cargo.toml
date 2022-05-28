@@ -2,7 +2,7 @@
 edition = "2021"
 name = "datafusion-objectstore-s3"
 description = "S3 as an ObjectStore for Datafusion"
-version = "0.1.0"
+version = "0.2.0"
 homepage = "https://github.com/datafusion-contrib/datafusion-objectstore-s3"
 repository = "https://github.com/datafusion-contrib/datafusion-objectstore-s3"
 readme = "README.md"
