@@ -306,6 +306,7 @@ impl ObjectReader for AmazonS3FileReader {
 mod tests {
     use crate::object_store::s3::*;
     use aws_types::credentials::Credentials;
+    //use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_eq;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
@@ -487,22 +488,23 @@ mod tests {
 
         let filename = "s3://data/alltypes_plain.snappy.parquet";
 
-        let config = ListingTableConfig::new(ListingTableUrl::parse(filename).map_err(map_datafusion_error_to_io_error)?)
+        let config = ListingTableConfig::new(ListingTableUrl::parse(filename).unwrap())
             .infer(&ctx.state())
             .await
-            .map_err(map_datafusion_error_to_io_error)?;
+            .unwrap();
 
-        let table = ListingTable::try_new(config).map_err(map_datafusion_error_to_io_error)?;
+        let table = ListingTable::try_new(config).unwrap();
 
         ctx.register_table("tbl", Arc::new(table)).unwrap();
 
         let batches = ctx
             .sql("SELECT * FROM tbl")
             .await
-            .map_err(map_datafusion_error_to_io_error)?
+            .unwrap()
             .collect()
             .await
-            .map_err(map_datafusion_error_to_io_error)?;
+            .unwrap();
+
         let expected = vec![
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
             "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
@@ -512,8 +514,7 @@ mod tests {
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
         ];
 
-        //TODO TIMVW
-        //assert_batches_eq!(expected, x);
+        assert_batches_eq!(expected, &batches);
         Ok(())
     }
 
