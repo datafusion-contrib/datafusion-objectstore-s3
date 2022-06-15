@@ -118,11 +118,14 @@
 //! # )
 //! # .await);
 //!
-//! let config = ListingTableConfig::new(s3_file_system, filename).infer().await?;
+//! let mut ctx = SessionContext::new();
+//! ctx.runtime_env().register_object_store("s3", s3_file_system);
+//!
+//! let config = ListingTableConfig::new(ListingTableUrl::parse(filename)?)
+//!     .infer(&ctx.state())
+//!     .await?;
 //!
 //! let table = ListingTable::try_new(config)?;
-//!
-//! let mut ctx = SessionContext::new();
 //!
 //! ctx.register_table("tbl", Arc::new(table))?;
 //!
@@ -174,11 +177,12 @@
 //!     );
 //!
 //!     let ctx = SessionContext::new();
+//!     ctx.runtime_env().register_object_store("s3", s3_file_system);
 //!
 //!     let uri = "s3://data/alltypes_plain.snappy.parquet";
 //!
-//!     let config = ListingTableConfig::new(s3_file_system, uri)
-//!         .infer()
+//!     let config = ListingTableConfig::new(ListingTableUrl::parse(uri)?)
+//!         .infer(&ctx.state())
 //!         .await?;
 //!
 //!     let table = ListingTable::try_new(config)?;

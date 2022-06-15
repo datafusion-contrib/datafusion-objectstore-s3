@@ -24,10 +24,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::{stream, AsyncRead};
 
-use datafusion_data_access::object_store::{
+use datafusion::datafusion_data_access::object_store::{
     FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
-use datafusion_data_access::{FileMeta, Result, SizedFile};
+use datafusion::datafusion_data_access::{FileMeta, Result, SizedFile};
 
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
@@ -120,9 +120,12 @@ impl S3FileSystem {
 #[async_trait]
 impl ObjectStore for S3FileSystem {
     async fn list_file(&self, uri: &str) -> Result<FileMetaStream> {
-        let (_, prefix) = uri.split_once("s3://").ok_or_else(|| {
-            std::io::Error::new(ErrorKind::Other, S3Error::AWS("No s3 scheme found".into()))
-        })?;
+        let prefix = if let Some((_scheme, path)) = uri.split_once("://") {
+            path
+        } else {
+            uri
+        };
+
         let (bucket, prefix) = match prefix.split_once('/') {
             Some((bucket, prefix)) => (bucket.to_owned(), prefix),
             None => (prefix.to_owned(), ""),
@@ -415,6 +418,8 @@ mod tests {
     // Test that reading Parquet file with `S3FileSystem` can create a `ListingTable`
     #[tokio::test]
     async fn test_read_parquet() -> Result<()> {
+        let ctx = SessionContext::new();
+
         let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
@@ -433,17 +438,22 @@ mod tests {
             .await,
         );
 
+        ctx.runtime_env()
+            .register_object_store("s3", s3_file_system);
+
         let filename = "s3://data/alltypes_plain.snappy.parquet";
 
-        let config = ListingTableConfig::new(s3_file_system, filename)
-            .infer()
-            .await
-            .map_err(map_datafusion_error_to_io_error)?;
+        let config = ListingTableConfig::new(
+            ListingTableUrl::parse(filename).map_err(map_datafusion_error_to_io_error)?,
+        )
+        .infer(&ctx.state())
+        .await
+        .map_err(map_datafusion_error_to_io_error)?;
 
         let table = ListingTable::try_new(config).map_err(map_datafusion_error_to_io_error)?;
 
         let exec = table
-            .scan(&None, &[], Some(1024))
+            .scan(&ctx.state(), &None, &[], Some(1024))
             .await
             .map_err(map_datafusion_error_to_io_error)?;
         assert_eq!(exec.statistics().num_rows, Some(2));
@@ -454,6 +464,8 @@ mod tests {
     // Test that a SQL query can be executed on a Parquet file that was read from `S3FileSystem`
     #[tokio::test]
     async fn test_sql_query() -> Result<()> {
+        let ctx = SessionContext::new();
+
         let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
@@ -472,26 +484,28 @@ mod tests {
             .await,
         );
 
+        ctx.runtime_env()
+            .register_object_store("s3", s3_file_system);
+
         let filename = "s3://data/alltypes_plain.snappy.parquet";
 
-        let config = ListingTableConfig::new(s3_file_system, filename)
-            .infer()
+        let config = ListingTableConfig::new(ListingTableUrl::parse(filename).unwrap())
+            .infer(&ctx.state())
             .await
-            .map_err(map_datafusion_error_to_io_error)?;
+            .unwrap();
 
-        let table = ListingTable::try_new(config).map_err(map_datafusion_error_to_io_error)?;
-
-        let ctx = SessionContext::new();
+        let table = ListingTable::try_new(config).unwrap();
 
         ctx.register_table("tbl", Arc::new(table)).unwrap();
 
         let batches = ctx
             .sql("SELECT * FROM tbl")
             .await
-            .map_err(map_datafusion_error_to_io_error)?
+            .unwrap()
             .collect()
             .await
-            .map_err(map_datafusion_error_to_io_error)?;
+            .unwrap();
+
         let expected = vec![
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
             "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
@@ -500,6 +514,7 @@ mod tests {
             "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+"
         ];
+
         assert_batches_eq!(expected, &batches);
         Ok(())
     }
@@ -507,6 +522,8 @@ mod tests {
     // Test that a SQL query can be executed on a Parquet file that was read from `S3FileSystem`
     #[tokio::test]
     async fn test_create_external_table_sql_query() -> Result<()> {
+        let ctx = SessionContext::new();
+
         let s3_file_system = Arc::new(
             S3FileSystem::new(
                 Some(SharedCredentialsProvider::new(Credentials::new(
@@ -524,8 +541,6 @@ mod tests {
             )
             .await,
         );
-
-        let ctx = SessionContext::new();
 
         ctx.runtime_env()
             .register_object_store("s3", s3_file_system);
@@ -560,16 +575,32 @@ mod tests {
             .await,
         );
 
+        let ctx = SessionContext::new();
+        ctx.runtime_env()
+            .register_object_store("s3", s3_file_system);
+
         let filename = "s3://bad_data/PARQUET-1481.parquet";
 
-        let config = ListingTableConfig::new(s3_file_system, filename)
-            .infer()
+        let config = ListingTableConfig::new(ListingTableUrl::parse(filename).unwrap())
+            .infer(&ctx.state())
             .await
             .unwrap();
 
         let table = ListingTable::try_new(config).unwrap();
 
-        table.scan(&None, &[], Some(1024)).await.unwrap();
+        table
+            .scan(&ctx.state(), &None, &[], Some(1024))
+            .await
+            .unwrap();
+    }
+
+    // Test that without registration there is no s3 filesystem on a DataFusion `ExecutionContext`
+    #[tokio::test]
+    async fn test_ctx_object_store() -> Result<()> {
+        let ctx = SessionContext::new();
+        let url = ListingTableUrl::parse("s3://").unwrap();
+        assert!(ctx.runtime_env().object_store(url).is_err());
+        Ok(())
     }
 
     // Test that `S3FileSystem` can be registered as object store on a DataFusion `ExecutionContext`
@@ -596,8 +627,9 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.runtime_env()
             .register_object_store("s3", s3_file_system);
-        let (_, name) = ctx.runtime_env().object_store("s3").unwrap();
-        assert_eq!(name, "s3");
+
+        let url = ListingTableUrl::parse("s3://").unwrap();
+        assert!(ctx.runtime_env().object_store(url).is_ok());
 
         Ok(())
     }
