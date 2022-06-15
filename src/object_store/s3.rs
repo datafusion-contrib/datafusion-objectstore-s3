@@ -120,8 +120,7 @@ impl S3FileSystem {
 #[async_trait]
 impl ObjectStore for S3FileSystem {
     async fn list_file(&self, uri: &str) -> Result<FileMetaStream> {
-
-        let prefix = if let Some((_scheme, path)) = uri.split_once("://") {
+        let prefix = if let Some(("s3", path)) = uri.split_once("://") {
             path
         } else {
             uri
