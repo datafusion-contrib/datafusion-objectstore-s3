@@ -306,7 +306,6 @@ impl ObjectReader for AmazonS3FileReader {
 mod tests {
     use crate::object_store::s3::*;
     use aws_types::credentials::Credentials;
-    //use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_eq;
     use datafusion::datasource::listing::*;
     use datafusion::datasource::TableProvider;
