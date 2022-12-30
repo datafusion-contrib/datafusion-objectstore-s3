@@ -30,9 +30,9 @@ use datafusion_data_access::object_store::{
 use datafusion_data_access::{FileMeta, Result, SizedFile};
 
 use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, RetryConfig};
+use aws_sdk_s3::{config::Builder, Client, Endpoint, Region, config::retry::RetryConfig};
 use aws_smithy_async::rt::sleep::AsyncSleep;
-use aws_smithy_types::timeout::Config;
+use aws_smithy_types::timeout::TimeoutConfig;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::Buf;
@@ -49,7 +49,7 @@ async fn new_client(
     endpoint: Option<Endpoint>,
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
-    timeout_config: Option<Config>,
+    timeout_config: Option<TimeoutConfig>,
 ) -> Client {
     let config = aws_config::load_from_env().await;
 
@@ -91,7 +91,7 @@ pub struct S3FileSystem {
     endpoint: Option<Endpoint>,
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
-    timeout_config: Option<Config>,
+    timeout_config: Option<TimeoutConfig>,
     client: Client,
 }
 
@@ -103,7 +103,7 @@ impl S3FileSystem {
         endpoint: Option<Endpoint>,
         retry_config: Option<RetryConfig>,
         sleep: Option<Arc<dyn AsyncSleep>>,
-        timeout_config: Option<Config>,
+        timeout_config: Option<TimeoutConfig>,
     ) -> Self {
         Self {
             credentials_provider: credentials_provider.clone(),
@@ -150,7 +150,8 @@ impl ObjectStore for S3FileSystem {
                 },
                 last_modified: object
                     .last_modified()
-                    .map(|last_modified| last_modified.to_chrono_utc()),
+                    .map(|last_modified| last_modified.to_chrono_utc().ok())
+                    .flatten(),
             })
         }));
 
@@ -188,7 +189,7 @@ struct AmazonS3FileReader {
     endpoint: Option<Endpoint>,
     retry_config: Option<RetryConfig>,
     sleep: Option<Arc<dyn AsyncSleep>>,
-    timeout_config: Option<Config>,
+    timeout_config: Option<TimeoutConfig>,
     file: SizedFile,
 }
 
@@ -200,7 +201,7 @@ impl AmazonS3FileReader {
         endpoint: Option<Endpoint>,
         retry_config: Option<RetryConfig>,
         sleep: Option<Arc<dyn AsyncSleep>>,
-        timeout_config: Option<Config>,
+        timeout_config: Option<TimeoutConfig>,
         file: SizedFile,
     ) -> Result<Self> {
         Ok(Self {
@@ -308,7 +309,6 @@ mod tests {
     use datafusion::error::DataFusionError;
     use datafusion::prelude::*;
     use futures::StreamExt;
-    use http::Uri;
 
     const ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
     const SECRET_ACCESS_KEY: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
@@ -327,7 +327,7 @@ mod tests {
                 PROVIDER_NAME,
             ))),
             None,
-            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+            Endpoint::immutable(MINIO_ENDPOINT).ok(),
             None,
             None,
             None,
@@ -377,7 +377,7 @@ mod tests {
                 PROVIDER_NAME,
             ))),
             None,
-            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+            Endpoint::immutable(MINIO_ENDPOINT).ok(),
             None,
             None,
             None,
@@ -425,7 +425,7 @@ mod tests {
                     PROVIDER_NAME,
                 ))),
                 None,
-                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                Endpoint::immutable(MINIO_ENDPOINT).ok(),
                 None,
                 None,
                 None,
@@ -464,7 +464,7 @@ mod tests {
                     PROVIDER_NAME,
                 ))),
                 None,
-                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                Endpoint::immutable(MINIO_ENDPOINT).ok(),
                 None,
                 None,
                 None,
@@ -517,7 +517,7 @@ mod tests {
                     PROVIDER_NAME,
                 ))),
                 None,
-                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                Endpoint::immutable(MINIO_ENDPOINT).ok(),
                 None,
                 None,
                 None,
@@ -552,7 +552,7 @@ mod tests {
                     PROVIDER_NAME,
                 ))),
                 None,
-                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                Endpoint::immutable(MINIO_ENDPOINT).ok(),
                 None,
                 None,
                 None,
@@ -585,7 +585,7 @@ mod tests {
                     PROVIDER_NAME,
                 ))),
                 None,
-                Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+                Endpoint::immutable(MINIO_ENDPOINT).ok(),
                 None,
                 None,
                 None,
@@ -615,7 +615,7 @@ mod tests {
                 PROVIDER_NAME,
             ))),
             None,
-            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+            Endpoint::immutable(MINIO_ENDPOINT).ok(),
             None,
             None,
             None,
@@ -654,7 +654,7 @@ mod tests {
                 PROVIDER_NAME,
             ))),
             None,
-            Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+            Endpoint::immutable(MINIO_ENDPOINT).ok(),
             None,
             None,
             None,
