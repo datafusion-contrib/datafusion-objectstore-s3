@@ -56,7 +56,7 @@ jobs:
           --volume "$(pwd)/parquet-testing:/data" \
           --env "MINIO_ROOT_USER=AKIAIOSFODNN7EXAMPLE" \
           --env "MINIO_ROOT_PASSWORD=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
-          quay.io/minio/minio server /data \
+          minio/minio:RELEASE.2022-05-26T05-48-41Z.hotfix.204b42b6b server /data \
           --console-address ":9001"
       - name: Run tests
         run: |
