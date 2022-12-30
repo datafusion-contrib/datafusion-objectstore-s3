@@ -66,7 +66,7 @@
 //!         PROVIDER_NAME,
 //!     ))), // SharedCredentialsProvider
 //!     None, //Region
-//!     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))), //Endpoint
+//!     Endpoint::immutable(MINIO_ENDPOINT).ok(), //Endpoint
 //!     None, // RetryConfig
 //!     None, // AsyncSleep
 //!     None, // TimeoutConfig
@@ -111,7 +111,7 @@
 //! #         PROVIDER_NAME,
 //! #     ))),
 //! #     None,
-//! #     Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+//! #     Endpoint::immutable(MINIO_ENDPOINT).ok(),
 //! #     None,
 //! #     None,
 //! #     None,
@@ -165,7 +165,7 @@
 //!                 PROVIDER_NAME,
 //!             ))),
 //!             None,
-//!             Some(Endpoint::immutable(Uri::from_static(MINIO_ENDPOINT))),
+//!             Endpoint::immutable(MINIO_ENDPOINT).ok(),
 //!             None,
 //!             None,
 //!             None,
